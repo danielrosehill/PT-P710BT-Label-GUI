@@ -1,3 +1,15 @@
+pt-p710bt-label-gui (0.2.0-7) unstable; urgency=medium
+
+  * Add CUPS print backend via the philpem ptouch driver
+    (printer-driver-ptouch). With the PT-P710BT set up as a CUPS queue,
+    multi-copy prints with a single leading edge and a full cut between
+    each label — what ptouch-print physically can't do.
+  * New "Backend" selector on the Label tab: defaults to CUPS when a
+    PT-P710BT queue is detected, falls back to ptouch-print CLI otherwise.
+    The previous behaviour is preserved on the CLI backend.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:56:51 +0300
+
 pt-p710bt-label-gui (0.2.0-6) unstable; urgency=medium
 
   * Replace the "Pad (px)" field with separate Left/Right margin controls

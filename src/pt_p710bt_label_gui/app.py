@@ -35,6 +35,9 @@ from PyQt6.QtWidgets import (
 )
 
 from .batch_tab import BatchRow, BatchTab
+from .cups_print import CupsError, CupsJob
+from .cups_print import find_queue as cups_find_queue
+from .cups_print import print_job as cups_print_job
 from .font_installer import is_installed, migrate_legacy_dir, refresh_cache
 from .font_picker import FontPickerDialog
 from .fonts import DEFAULT_FAMILY, contains_hebrew, grouped, is_hebrew_family
@@ -232,11 +235,27 @@ class LabelGUI(QMainWindow):
         self.auto_cut = QCheckBox("Auto-cut after print")
         self.auto_cut.setChecked(True)
         self.auto_cut.setToolTip(
-            "When OFF, passes --chain to ptouch-print (continuous tape, no cut)."
+            "When OFF, runs in chain mode (continuous tape, no cut between)."
         )
         self.precut = QCheckBox("Pre-cut (chain mode only)")
         self.cutmark = QCheckBox("Print cut-mark")
+
+        self.backend_combo = QComboBox()
+        self.backend_combo.addItem("CUPS (recommended)", "cups")
+        self.backend_combo.addItem("ptouch-print (CLI)", "ptouch-print")
+        self.backend_combo.setToolTip(
+            "CUPS routes through the system printer queue using the philpem "
+            "ptouch driver. It supports multi-copy with a single leading "
+            "edge and a full cut between each label.\n\n"
+            "ptouch-print is the fallback CLI; it cannot do leader-once "
+            "with cuts between copies."
+        )
+        # Default to ptouch-print if CUPS queue isn't available.
+        if cups_find_queue() is None:
+            self.backend_combo.setCurrentIndex(1)
+
         form.addRow(self.fill_height)
+        form.addRow("Backend:", self.backend_combo)
         form.addRow(self.auto_cut)
         form.addRow(self.precut)
         form.addRow(self.cutmark)
@@ -876,12 +895,61 @@ class LabelGUI(QMainWindow):
             QMessageBox.warning(self, "Nothing to print",
                                 "Enter text or pick an image first.")
             return
+        backend = self.backend_combo.currentData()
+        if backend == "cups":
+            self._print_via_cups(job)
+        else:
+            self._print_via_ptouch_print(job)
+
+    def _print_via_cups(self, job: PrintJob) -> None:
+        # 1. Render the label to a PNG via ptouch-print --writepng (single copy).
+        png_copies = job.copies
+        job.copies = 1
+        try:
+            rc, out = render_preview(job, self._preview_path)
+        except PtouchError as exc:
+            QMessageBox.critical(self, "Render error", str(exc))
+            return
+        if rc != 0 or not self._preview_path.exists():
+            QMessageBox.critical(
+                self, "Render failed",
+                f"ptouch-print --writepng exited {rc}\n\n{out.strip()}"
+            )
+            return
+        # 2. Spool to CUPS — CUPS handles multi-copy with proper cut behaviour.
+        auto_cut = self.auto_cut.isChecked()
+        cups_job = CupsJob(
+            png_path=self._preview_path,
+            tape_width_mm=self._last_tape_mm,
+            copies=png_copies,
+            auto_cut=auto_cut,
+            chain_mode=not auto_cut,
+            job_title=("label" if not job.lines else " | ".join(job.lines)[:64]),
+        )
+        try:
+            rc, out, argv = cups_print_job(cups_job)
+        except CupsError as exc:
+            QMessageBox.critical(self, "CUPS error", str(exc))
+            return
+        self.preview_log.setPlainText(
+            f"$ {' '.join(argv)}\n(exit {rc})\n{out.strip()}"
+        )
+        if rc != 0:
+            QMessageBox.critical(
+                self, "Print failed",
+                f"lp exited {rc}\n\n{out.strip()}"
+            )
+            return
+        self.statusBar().showMessage(
+            f"Spooled {png_copies} {'copy' if png_copies == 1 else 'copies'} to CUPS.",
+            4000,
+        )
+
+    def _print_via_ptouch_print(self, job: PrintJob) -> None:
         # Cuts between copies require the printer's ~24 mm head-to-cutter
-        # gap to be fed forward for each cut — that bleed margin is physical
-        # and unavoidable. So with auto-cut ON we run N separate ptouch-print
-        # invocations (clean cuts, ~24 mm leader on each). With auto-cut OFF,
-        # one invocation with --copies=N --chain produces a continuous strip
-        # with no cuts between (user cuts manually).
+        # gap to be fed forward per cut. With auto-cut ON we run N separate
+        # invocations (clean cut per copy, ~24 mm leader on each). With
+        # auto-cut OFF, one invocation with --copies=N --chain.
         copies = job.copies
         auto_cut = self.auto_cut.isChecked()
         if auto_cut and copies > 1:
