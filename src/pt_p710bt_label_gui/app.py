@@ -6,13 +6,12 @@ import tempfile
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtGui import QAction, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
-    QFontComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -29,6 +28,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .font_install_dialog import FontInstallDialog
+from .font_installer import is_installed
+from .fonts import DEFAULT_FAMILY, grouped
 from .ptouch import PrintJob, PtouchError, print_job, query_info, render_preview
 
 
@@ -53,9 +55,48 @@ class LabelGUI(QMainWindow):
         self._debounce.timeout.connect(self._do_preview)
 
         self._build_ui()
+        self._build_menu()
         self._wire_signals()
         self.refresh_info()
         self._schedule_preview()
+
+    def _build_menu(self) -> None:
+        m_tools = self.menuBar().addMenu("&Tools")
+        act_install = QAction("Install Google Fonts…", self)
+        act_install.triggered.connect(self._open_font_installer)
+        m_tools.addAction(act_install)
+        act_refresh_fonts = QAction("Refresh font list", self)
+        act_refresh_fonts.triggered.connect(self._refresh_font_list)
+        m_tools.addAction(act_refresh_fonts)
+
+    def _open_font_installer(self) -> None:
+        dlg = FontInstallDialog(self)
+        dlg.exec()
+        self._refresh_font_list()
+
+    def _refresh_font_list(self) -> None:
+        current = self.font_combo.currentData() or DEFAULT_FAMILY
+        self._populate_font_combo()
+        idx = self.font_combo.findData(current)
+        if idx >= 0:
+            self.font_combo.setCurrentIndex(idx)
+        self._schedule_preview()
+
+    def _populate_font_combo(self) -> None:
+        self.font_combo.blockSignals(True)
+        self.font_combo.clear()
+        for label, entries in grouped():
+            # category separator
+            self.font_combo.addItem(f"── {label} ──")
+            self.font_combo.model().item(self.font_combo.count() - 1).setEnabled(False)
+            for e in entries:
+                tag = "" if is_installed(e.family) else "  (not installed)"
+                self.font_combo.addItem(f"{e.display}{tag}", userData=e.family)
+        # select default
+        idx = self.font_combo.findData(DEFAULT_FAMILY)
+        if idx >= 0:
+            self.font_combo.setCurrentIndex(idx)
+        self.font_combo.blockSignals(False)
 
     # ---------- UI construction ----------
 
@@ -97,8 +138,8 @@ class LabelGUI(QMainWindow):
         # Font / layout
         fmt_box = QGroupBox("Format")
         fmt_layout = QFormLayout(fmt_box)
-        self.font_combo = QFontComboBox()
-        self.font_combo.setCurrentFont(QFont("DejaVu Sans"))
+        self.font_combo = QComboBox()
+        self._populate_font_combo()
         self.font_size = QSpinBox()
         self.font_size.setRange(0, 200)
         self.font_size.setValue(0)
@@ -120,12 +161,16 @@ class LabelGUI(QMainWindow):
         self.pad = QSpinBox()
         self.pad.setRange(0, 500)
         self.pad.setValue(0)
-        self.chain = QCheckBox("Chain (no feed/cut after)")
-        self.precut = QCheckBox("Precut (cut before label)")
+        self.auto_cut = QCheckBox("Auto-cut after print")
+        self.auto_cut.setChecked(True)
+        self.auto_cut.setToolTip(
+            "When OFF, passes --chain to ptouch-print (continuous tape, no cut)."
+        )
+        self.precut = QCheckBox("Pre-cut (cut before label, chain mode only)")
         self.cutmark = QCheckBox("Print cut-mark")
         opts_layout.addRow("Copies:", self.copies)
         opts_layout.addRow("Padding (px):", self.pad)
-        opts_layout.addRow(self.chain)
+        opts_layout.addRow(self.auto_cut)
         opts_layout.addRow(self.precut)
         opts_layout.addRow(self.cutmark)
         left.addWidget(opts_box)
@@ -178,11 +223,12 @@ class LabelGUI(QMainWindow):
     def _wire_signals(self) -> None:
         self.refresh_btn.clicked.connect(self.refresh_info)
         self.text_edit.textChanged.connect(self._schedule_preview)
-        self.font_combo.currentFontChanged.connect(self._schedule_preview)
+        self.font_combo.currentIndexChanged.connect(self._schedule_preview)
         self.font_size.valueChanged.connect(self._schedule_preview)
         self.align_combo.currentIndexChanged.connect(self._schedule_preview)
         self.pad.valueChanged.connect(self._schedule_preview)
         self.cutmark.toggled.connect(self._schedule_preview)
+        self.auto_cut.toggled.connect(self._schedule_preview)
         self.image_path.textChanged.connect(self._schedule_preview)
         self.image_browse.clicked.connect(self._on_browse_image)
         self.image_clear.clicked.connect(lambda: self.image_path.setText(""))
@@ -195,7 +241,7 @@ class LabelGUI(QMainWindow):
         text = self.text_edit.toPlainText()
         lines = [ln for ln in text.splitlines() if ln.strip() != ""][:4]
         align = {"left": "l", "center": "c", "right": "r"}[self.align_combo.currentText()]
-        font_name = self.font_combo.currentFont().family()
+        font_name = self.font_combo.currentData() or DEFAULT_FAMILY
         font_size = self.font_size.value() or None
         img = Path(self.image_path.text()).expanduser() if self.image_path.text().strip() else None
         return PrintJob(
@@ -205,7 +251,7 @@ class LabelGUI(QMainWindow):
             align=align,
             copies=self.copies.value(),
             pad=self.pad.value() or None,
-            chain=self.chain.isChecked(),
+            chain=not self.auto_cut.isChecked(),
             precut=self.precut.isChecked(),
             cutmark=self.cutmark.isChecked(),
             image=img if img and img.exists() else None,

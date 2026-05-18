@@ -1,3 +1,20 @@
+pt-p710bt-label-gui (0.1.0-2) unstable; urgency=medium
+
+  * Curated Google Fonts library (30 fonts incl. Heebo for Hebrew).
+    - Font picker is now a category-grouped dropdown sourced from
+      pt_p710bt_label_gui.fonts; default is IBM Plex Sans.
+    - Each entry tagged "(not installed)" when fontconfig doesn't see it.
+  * New Tools menu → "Install Google Fonts…" dialog.
+    - Lists every curated font with installed/missing status.
+    - "Install missing" and "Reinstall all" buttons; threaded download +
+      progress log; runs fc-cache when done.
+    - Downloads directly from github.com/google/fonts (canonical source) —
+      no third-party mirror, no API key required.
+  * Replaced "Chain" checkbox with "Auto-cut after print" (default ON).
+    When OFF, ptouch-print is invoked with --chain.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 22:35:00 +0300
+
 pt-p710bt-label-gui (0.1.0-1) unstable; urgency=medium
 
   * Initial release.
