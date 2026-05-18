@@ -12,6 +12,9 @@ authors = [{ name = "Daniel Rosehill", email = "daniel@danielrosehill.co.il" }]
 license = { text = "MIT" }
 dependencies = [
     "PyQt6>=6.6",
+    "Pillow",
+    "pyusb",
+    "packbits",
 ]
 
 [project.scripts]
@@ -19,3 +22,7 @@ pt-p710bt-label-gui = "pt_p710bt_label_gui.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["pt_p710bt_label_gui*"]
+
+[tool.setuptools.package-data]
+"pt_p710bt_label_gui._vendor.ptouch" = ["LICENSE"]

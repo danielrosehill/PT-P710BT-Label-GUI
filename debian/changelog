@@ -1,3 +1,19 @@
+pt-p710bt-label-gui (0.3.0-4) unstable; urgency=medium
+
+  * Vendor the patched nbuchwitz/ptouch fork into the package tree
+    (src/pt_p710bt_label_gui/_vendor/ptouch/, LGPL-2.1-or-later).
+    The GUI is now a single integrated codebase — no more relying on
+    a hand-built venv in a sibling repo, no subprocess hop for printing.
+  * In-process USB print path: direct imports, proper Python exception
+    handling, automatic USB reset retry on transient "cannot open
+    resource" errors.
+  * Resolves font family names (e.g. "IBM Plex Sans") to TTF paths via
+    fontconfig (fc-match) so the PIL TextLabel renderer can load them.
+  * New runtime deps: python3-pil, python3-usb, python3-packbits,
+    fontconfig.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 01:16:04 +0300
+
 pt-p710bt-label-gui (0.3.0-3) unstable; urgency=medium
 
   * Better print-failure messages: when libusb returns "cannot open

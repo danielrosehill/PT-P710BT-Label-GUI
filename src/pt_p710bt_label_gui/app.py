@@ -40,7 +40,7 @@ from .font_picker import FontPickerDialog
 from .fonts import DEFAULT_FAMILY, contains_hebrew, grouped, is_hebrew_family
 from .fonts_tab import FontsTab
 from .ptouch import PrintJob, PtouchError, query_info, render_preview
-from .ptouch_nb import NbJob, NbPtouchError
+from .ptouch_nb import NbJob
 from .ptouch_nb import print_job as nb_print_job
 
 
@@ -882,8 +882,8 @@ class LabelGUI(QMainWindow):
         self._print_via_nb(job)
 
     def _print_via_nb(self, job: PrintJob) -> None:
-        # nbuchwitz/ptouch sends one job with N pages and a single leader,
-        # cuts between each. This is what `ptouch-print` physically can't do.
+        # In-process print via the vendored nbuchwitz/ptouch fork: one job
+        # with N pages, leader-scrap (precut) first, full cut between each.
         nb_job = NbJob(
             labels=[ln for ln in job.lines if ln],
             tape_width_mm=self._last_tape_mm,
@@ -891,35 +891,35 @@ class LabelGUI(QMainWindow):
             font=job.font,
             font_size=job.font_size,
             align_h={"l": "left", "c": "center", "r": "right"}.get(job.align, "center"),
-            full_cut=True,  # PT-P710BT has no half-cut
+            full_cut=True,
+            precut=True,
         )
-        try:
-            rc, out, argv = nb_print_job(nb_job)
-        except NbPtouchError as exc:
-            QMessageBox.critical(self, "Backend missing", str(exc))
-            return
-        self.preview_log.setPlainText(
-            f"$ {' '.join(argv)}\n(exit {rc})\n{out.strip()}"
-        )
+        rc, out = nb_print_job(nb_job)
+        self.preview_log.setPlainText(f"(exit {rc})\n{out.strip()}")
         if rc != 0:
             hint = ""
             lower = out.lower()
             if "cannot open resource" in lower or "resource busy" in lower:
                 hint = (
-                    "\n\nThis is a transient libusb error — the USB handle "
-                    "is stuck from a previous interrupted job.\n\n"
-                    "Power-cycle the printer (switch it off and on again), "
-                    "then click Refresh device info on the Device tab, "
-                    "then try Print again."
+                    "\n\nlibusb 'cannot open resource' — the USB handle is "
+                    "stuck from a previous interrupted job. The print path "
+                    "already attempts a USB reset once before failing. If "
+                    "this persists, power-cycle the printer (off, then on) "
+                    "and click Refresh device info on the Device tab."
                 )
             elif "0x0100" in lower or "cover open" in lower:
                 hint = (
                     "\n\n0x0100 typically means cover/tape issue or a stale "
                     "error state. Power-cycle the printer to clear it."
                 )
+            elif "not found" in lower:
+                hint = (
+                    "\n\nPrinter not on the USB bus. Check it is powered on "
+                    "and the USB cable is connected, then Refresh device info."
+                )
             QMessageBox.critical(
                 self, "Print failed",
-                f"ptouch (nbuchwitz) exited {rc}\n\n{out.strip()}{hint}"
+                f"Print backend reported error\n\n{out.strip()}{hint}"
             )
             return
         self.statusBar().showMessage(

@@ -1,117 +1,192 @@
-"""Print backend: nbuchwitz/ptouch (Python).
+"""In-process print backend using the vendored nbuchwitz/ptouch fork.
 
-The default `ptouch-print` binary cannot do "one leading edge, full cut
-between each copy" — it re-finalises per copy, replicating the ~24 mm
-leader. nbuchwitz/ptouch can: `print_multi(labels)` sends one job with
-multiple raster pages and a single leader.
+The patched ptouch library (LGPL-2.1-or-later, with our PT-P710BT and
+--precut additions) lives at `pt_p710bt_label_gui._vendor.ptouch`. We
+import it directly here — no subprocess, no separate venv, no PATH
+hunting. Single integrated codebase.
 
-Daniel's local PT-P710BT support patch lives on the branch
-`add-pt-p710bt` of https://github.com/danielrosehill/ptouch (PR open
-upstream against nbuchwitz/ptouch).
-
-The library is consumed as a CLI (`python3 -m ptouch ...`) since this
-GUI ships as a system .deb that doesn't bring its own venv. Interpreter
-selection: env-var override → known venv path → system `python3`.
+In-process gives us proper exception handling and the ability to do a
+USB reset if libusb returns "Resource busy" / "cannot open resource"
+after an interrupted previous job.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-PRINTER_NAME = "P710BT"
+from PIL import ImageFont
 
-_ENV_OVERRIDE = "PT_P710BT_LABEL_GUI_NB_PYTHON"
-_KNOWN_VENV_PATHS = [
-    Path.home() / "repos/github/nbuchwitz-ptouch/.venv/bin/python",
-]
+from ._vendor.ptouch.connection import ConnectionUSB, PrinterConnectionError
+from ._vendor.ptouch.label import Label, TextLabel
+from ._vendor.ptouch.printers import PTP710BT
+from ._vendor.ptouch.tape import (
+    Tape3_5mm,
+    Tape6mm,
+    Tape9mm,
+    Tape12mm,
+    Tape18mm,
+    Tape24mm,
+)
 
 
 class NbPtouchError(RuntimeError):
     pass
 
 
-def find_python() -> str | None:
-    """Return a Python interpreter that has the `ptouch` module importable."""
-    candidates: list[str] = []
-    env_path = os.environ.get(_ENV_OVERRIDE)
-    if env_path:
-        candidates.append(env_path)
-    for p in _KNOWN_VENV_PATHS:
-        if p.exists():
-            candidates.append(str(p))
-    sys_python = shutil.which("python3") or shutil.which("python")
-    if sys_python:
-        candidates.append(sys_python)
-
-    for cand in candidates:
-        try:
-            cp = subprocess.run(
-                [cand, "-c", "import ptouch"],
-                capture_output=True, text=True, timeout=5,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-        if cp.returncode == 0:
-            return cand
-    return None
+_TAPE_BY_MM = {
+    3.5: Tape3_5mm,
+    6: Tape6mm,
+    9: Tape9mm,
+    12: Tape12mm,
+    18: Tape18mm,
+    24: Tape24mm,
+}
 
 
-def is_available() -> bool:
-    return find_python() is not None
+def _tape(mm: float):
+    cls = _TAPE_BY_MM.get(mm)
+    if cls is None:
+        # accept ints too (12 -> 12.0)
+        cls = _TAPE_BY_MM.get(float(mm))
+    if cls is None:
+        raise NbPtouchError(f"Unsupported tape width: {mm} mm")
+    return cls()
 
 
 @dataclass
 class NbJob:
     labels: list[str]               # one entry per distinct label (multi-line via \n)
-    tape_width_mm: int              # 12 for 12mm tape
-    copies: int = 1                 # multiplies the label list
+    tape_width_mm: float            # 12 for 12mm tape
+    copies: int = 1                 # multiplies labels
     font: str | None = None         # fontconfig family or .ttf path
     font_size: int | None = None    # px, or None for auto
     align_h: str = "center"         # left | center | right
     full_cut: bool = True           # PT-P710BT has no half-cut
-    precut: bool = True             # eject the 24mm leader as a scrap before the real label
+    precut: bool = True             # eject the 24mm leader as a scrap first
 
 
-def build_argv(python: str, job: NbJob) -> list[str]:
-    argv = [
-        python, "-m", "ptouch",
-        *job.labels,
-        "--usb",
-        "--printer", PRINTER_NAME,
-        "--tape-width", str(job.tape_width_mm),
-        "--align", job.align_h, "center",
-        "--copies", str(job.copies),
-    ]
-    if job.full_cut:
-        argv.append("--full-cut")
-    if job.precut:
-        argv.append("--precut")
-    if job.font:
-        argv += ["--font", job.font]
-    if job.font_size:
-        argv += ["--font-size", str(job.font_size)]
-    return argv
-
-
-def print_job(job: NbJob, timeout: float = 120.0,
-              python: str | None = None) -> tuple[int, str, list[str]]:
-    """Run a multi-label print via nbuchwitz/ptouch.
-
-    Returns (returncode, combined_output, argv). USB device access needs
-    root unless udev rules are set; the caller may already be root, in
-    which case sudo is skipped.
-    """
-    interp = python or find_python()
-    if not interp:
-        raise NbPtouchError(
-            "The nbuchwitz/ptouch backend isn't installed. "
-            "Install pyusb + the ptouch module (with PT-P710BT support) "
-            "in a venv, then set "
-            f"${_ENV_OVERRIDE} to that venv's python interpreter."
+def _resolve_font(family_or_path: str | None) -> str | None:
+    """Resolve a font family name (or TTF path) to a TTF file path."""
+    if not family_or_path:
+        return None
+    p = Path(family_or_path).expanduser()
+    if p.exists() and p.is_file():
+        return str(p)
+    fc = shutil.which("fc-match")
+    if not fc:
+        return None
+    try:
+        cp = subprocess.run(
+            [fc, "-f", "%{file}", family_or_path],
+            capture_output=True, text=True, timeout=4,
         )
-    argv = build_argv(interp, job)
-    cp = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    return cp.returncode, (cp.stdout or "") + (cp.stderr or ""), argv
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    out = (cp.stdout or "").strip()
+    return out or None
+
+
+def _build_text_label(text: str, tape, font_family: str | None,
+                      font_size_px: int | None):
+    """Build a TextLabel. font_family can be a fontconfig family or TTF path."""
+    font_path = _resolve_font(font_family)
+    if font_path:
+        try:
+            font = ImageFont.truetype(font_path, font_size_px or 48)
+        except OSError:
+            font = ImageFont.load_default()
+    else:
+        font = ImageFont.load_default()
+    # PIL's load_default() returns ImageFont.ImageFont; TextLabel requires
+    # FreeTypeFont. If we didn't get a real font, fall back to a known
+    # system font path (DejaVu is virtually always present on Linux).
+    if not isinstance(font, ImageFont.FreeTypeFont):
+        for fb in (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        ):
+            if Path(fb).exists():
+                font = ImageFont.truetype(fb, font_size_px or 48)
+                break
+    return TextLabel(text, tape=tape, font=font,
+                     font_size=font_size_px,
+                     auto_size=font_size_px is None)
+
+
+def _print_with_reset_retry(printer_class, job: NbJob, *, attempts: int = 2):
+    """Connect to printer, retrying with USB reset on transient errors."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            connection = ConnectionUSB()
+            printer = printer_class(connection)
+            return printer
+        except PrinterConnectionError as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            if "cannot open" in msg or "resource busy" in msg or "busy" in msg:
+                # Try a USB reset before retrying.
+                try:
+                    import usb.core
+                    dev = usb.core.find(idVendor=0x04F9, idProduct=0x20AF)
+                    if dev is not None:
+                        dev.reset()
+                        time.sleep(0.4)
+                except Exception:
+                    pass
+                if attempt < attempts - 1:
+                    continue
+            raise
+    if last_exc:
+        raise last_exc
+
+
+def print_job(job: NbJob) -> tuple[int, str]:
+    """Run a multi-label print. Returns (exit_code, log_text)."""
+    log_lines: list[str] = []
+
+    def log(msg: str) -> None:
+        log_lines.append(msg)
+
+    try:
+        tape = _tape(job.tape_width_mm)
+    except NbPtouchError as exc:
+        return 1, str(exc)
+
+    # Expand labels by copies count.
+    expanded_texts = [t for t in job.labels for _ in range(job.copies)]
+    if not expanded_texts:
+        return 1, "Nothing to print"
+
+    log(f"Printing {len(expanded_texts)} label(s) to PT-P710BT via USB…")
+    log(f"Tape: {job.tape_width_mm} mm  precut={job.precut}  full-cut={job.full_cut}")
+
+    try:
+        printer = _print_with_reset_retry(PTP710BT, job)
+    except PrinterConnectionError as exc:
+        return 1, f"{log_lines[0] if log_lines else ''}\n{exc}".strip()
+
+    try:
+        labels = [
+            _build_text_label(t, tape, job.font, job.font_size)
+            for t in expanded_texts
+        ]
+        if job.precut:
+            printer.precut(tape)
+        if len(labels) == 1:
+            printer.print(labels[0])
+        else:
+            printer.print_multi(labels, half_cut=not job.full_cut)
+        log("Done.")
+        return 0, "\n".join(log_lines)
+    except Exception as exc:
+        log(f"Error: {exc}")
+        return 1, "\n".join(log_lines)
+    finally:
+        try:
+            printer.disconnect()
+        except Exception:
+            pass

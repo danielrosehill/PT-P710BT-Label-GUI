@@ -15,7 +15,11 @@ Package: pt-p710bt-label-gui
 Architecture: all
 Depends: ${python3:Depends},
          ${misc:Depends},
-         python3-pyqt6
+         python3-pyqt6,
+         python3-pil,
+         python3-usb,
+         python3-packbits,
+         fontconfig
 Recommends: ptouch-print
 Description: GUI for the Brother PT-P710BT label printer
  A PyQt6 desktop GUI that wraps the ptouch-print CLI for the Brother
