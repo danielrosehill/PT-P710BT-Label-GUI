@@ -1,3 +1,13 @@
+pt-p710bt-label-gui (0.1.0-7) unstable; urgency=medium
+
+  * Preview reworked: label is now drawn as a horizontal strip at the true
+    label width (no square minimum), with dimension arrows on the left and
+    bottom showing tape height and label length in mm.
+  * New "Fill tape height" option (default OFF). Default auto-sizing is now
+    conservative (~60% of tape height) instead of always filling.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:02:18 +0300
+
 pt-p710bt-label-gui (0.1.0-6) unstable; urgency=medium
 
   * UI overhaul on the Label tab: soft Qt-rendered preview by default (smooth,

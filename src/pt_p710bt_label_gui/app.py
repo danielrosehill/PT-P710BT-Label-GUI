@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -188,6 +188,12 @@ class LabelGUI(QMainWindow):
         copies_pad.setContentsMargins(0, 0, 0, 0)
         form.addRow(cp_wrap)
 
+        self.fill_height = QCheckBox("Fill tape height (auto-size to fit)")
+        self.fill_height.setChecked(False)
+        self.fill_height.setToolTip(
+            "When ON, auto-size text to fill the tape height. "
+            "When OFF, use a conservative size (~60% of tape height)."
+        )
         self.auto_cut = QCheckBox("Auto-cut after print")
         self.auto_cut.setChecked(True)
         self.auto_cut.setToolTip(
@@ -195,6 +201,7 @@ class LabelGUI(QMainWindow):
         )
         self.precut = QCheckBox("Pre-cut (chain mode only)")
         self.cutmark = QCheckBox("Print cut-mark")
+        form.addRow(self.fill_height)
         form.addRow(self.auto_cut)
         form.addRow(self.precut)
         form.addRow(self.cutmark)
@@ -361,6 +368,7 @@ class LabelGUI(QMainWindow):
         self.pad.valueChanged.connect(self._schedule_preview)
         self.cutmark.toggled.connect(self._schedule_preview)
         self.auto_cut.toggled.connect(self._schedule_preview)
+        self.fill_height.toggled.connect(self._schedule_preview)
         self.image_path.textChanged.connect(self._schedule_preview)
 
         self.zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
@@ -586,26 +594,28 @@ class LabelGUI(QMainWindow):
         text = self.text_edit.toPlainText()
         lines = [ln for ln in text.splitlines() if ln.strip() != ""][:4] or [""]
         tape_px = self._last_tape_px
-        # Pick font size: user-specified, or auto = tape_px / lines * 0.9
+        # Pick font size: user-specified, or auto.
+        # Fill mode: 90% of available per-line height.
+        # Conservative (default): 60% of available per-line height.
+        fill = self.fill_height.isChecked()
+        scale = 0.9 if fill else 0.6
         if self.font_size.value() > 0:
             target_px = self.font_size.value()
         else:
-            target_px = int(tape_px / max(1, len(lines)) * 0.9)
+            target_px = int(tape_px / max(1, len(lines)) * scale)
 
         font_family = self.font_combo.currentData() or DEFAULT_FAMILY
         font = QFont(font_family)
         font.setPixelSize(max(6, target_px))
 
-        # Measure to size canvas
+        # Measure to size canvas — true label width (no square minimum).
         fm = QFontMetricsF(font)
         line_h = fm.height()
         widths = [fm.horizontalAdvance(ln) for ln in lines]
         text_w = max(widths) if widths else 0
         pad_px = self.pad.value()
-        # canvas: tape_px tall, width = max(text_w + margin, min)
         margin_x = max(4, int(tape_px * 0.08))
-        canvas_w = int(text_w + 2 * margin_x + pad_px * 2)
-        canvas_w = max(canvas_w, tape_px)  # at least square
+        canvas_w = max(int(text_w + 2 * margin_x + pad_px * 2), int(tape_px * 0.5))
         canvas_h = tape_px
 
         img = QImage(canvas_w, canvas_h, QImage.Format.Format_RGB32)
@@ -644,26 +654,98 @@ class LabelGUI(QMainWindow):
         pix = QPixmap.fromImage(img)
         self._apply_preview_pixmap(pix, source_px=(canvas_w, canvas_h))
         self.preview_log.setPlainText(
-            f"(soft preview — {canvas_w}×{canvas_h} px @ font {target_px}px)"
+            f"(soft preview — {canvas_w}×{canvas_h} px @ font {target_px}px, "
+            f"{'fill' if fill else 'conservative'})"
         )
 
     def _apply_preview_pixmap(self, pix: QPixmap, source_px: tuple[int, int]) -> None:
         src_w, src_h = source_px
         zoom = self._zoom / 100.0
-        target_h = max(1, int(src_h * zoom))
-        scaled = pix.scaledToHeight(
-            target_h, Qt.TransformationMode.SmoothTransformation
+        # Scale the label first, then composite annotations at display scale
+        # so the annotation text stays readable regardless of zoom.
+        scaled_label = pix.scaledToHeight(
+            max(1, int(src_h * zoom)), Qt.TransformationMode.SmoothTransformation
         )
-        self.preview_label.setPixmap(scaled)
-        self.preview_label.setText("")
-        self.preview_label.setMinimumSize(scaled.size())
-
         mm_length = src_w / PRINTER_DPI * 25.4
-        mm_width = src_h / PRINTER_DPI * 25.4
+        mm_height = src_h / PRINTER_DPI * 25.4
+        annotated = self._annotate_label(scaled_label, mm_length, mm_height)
+
+        self.preview_label.setPixmap(annotated)
+        self.preview_label.setText("")
+        self.preview_label.setMinimumSize(annotated.size())
+
         rtl_tag = " · RTL" if self._is_rtl() else ""
         self.preview_meta.setText(
-            f"{src_w}×{src_h} px · {mm_length:.1f} × {mm_width:.1f} mm{rtl_tag}"
+            f"{src_w}×{src_h} px · {mm_length:.1f} × {mm_height:.1f} mm{rtl_tag}"
         )
+
+    @staticmethod
+    def _annotate_label(label_pix: QPixmap, mm_length: float, mm_height: float) -> QPixmap:
+        """Wrap label pixmap with dimension arrows and a mm scale."""
+        lw, lh = label_pix.width(), label_pix.height()
+        left_margin = 56   # vertical "12 mm" dimension on the left
+        right_margin = 16
+        top_margin = 16
+        bottom_margin = 44  # horizontal mm scale on the bottom
+
+        cw = lw + left_margin + right_margin
+        ch = lh + top_margin + bottom_margin
+
+        out = QPixmap(cw, ch)
+        out.fill(QColor("#fafafa"))
+        p = QPainter(out)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+
+        # Draw the label with a thin border (represents the tape strip).
+        lx, ly = left_margin, top_margin
+        p.drawPixmap(lx, ly, label_pix)
+        p.setPen(QPen(QColor("#888"), 1))
+        p.drawRect(lx, ly, lw, lh)
+
+        ann = QPen(QColor("#333"), 1)
+        p.setPen(ann)
+        f = QFont()
+        f.setPixelSize(11)
+        p.setFont(f)
+        fm = QFontMetricsF(f)
+
+        # --- vertical (height) dimension on the left ---
+        ax = lx - 22  # arrow x position
+        p.drawLine(ax, ly, ax, ly + lh)
+        # arrowheads
+        for y, dy in ((ly, 4), (ly + lh, -4)):
+            p.drawLine(ax, y, ax - 3, y + dy)
+            p.drawLine(ax, y, ax + 3, y + dy)
+        # tick marks at tape edges (extend to label)
+        p.setPen(QPen(QColor("#bbb"), 1, Qt.PenStyle.DashLine))
+        p.drawLine(ax + 1, ly, lx, ly)
+        p.drawLine(ax + 1, ly + lh, lx, ly + lh)
+        p.setPen(ann)
+        # label "X mm" rotated vertically
+        p.save()
+        p.translate(ax - 8, ly + lh / 2)
+        p.rotate(-90)
+        txt = f"{mm_height:.1f} mm"
+        p.drawText(int(-fm.horizontalAdvance(txt) / 2), int(fm.ascent() / 2), txt)
+        p.restore()
+
+        # --- horizontal (length) dimension on the bottom ---
+        ay = ly + lh + 18
+        p.drawLine(lx, ay, lx + lw, ay)
+        for x, dx in ((lx, 4), (lx + lw, -4)):
+            p.drawLine(x, ay, x + dx, ay - 3)
+            p.drawLine(x, ay, x + dx, ay + 3)
+        p.setPen(QPen(QColor("#bbb"), 1, Qt.PenStyle.DashLine))
+        p.drawLine(lx, ay - 1, lx, ly + lh)
+        p.drawLine(lx + lw, ay - 1, lx + lw, ly + lh)
+        p.setPen(ann)
+        txt = f"{mm_length:.1f} mm"
+        tw = fm.horizontalAdvance(txt)
+        p.drawText(int(lx + lw / 2 - tw / 2), int(ay + 14), txt)
+
+        p.end()
+        return out
 
     # ---------- Misc slots ----------
 
