@@ -902,9 +902,24 @@ class LabelGUI(QMainWindow):
             f"$ {' '.join(argv)}\n(exit {rc})\n{out.strip()}"
         )
         if rc != 0:
+            hint = ""
+            lower = out.lower()
+            if "cannot open resource" in lower or "resource busy" in lower:
+                hint = (
+                    "\n\nThis is a transient libusb error — the USB handle "
+                    "is stuck from a previous interrupted job.\n\n"
+                    "Power-cycle the printer (switch it off and on again), "
+                    "then click Refresh device info on the Device tab, "
+                    "then try Print again."
+                )
+            elif "0x0100" in lower or "cover open" in lower:
+                hint = (
+                    "\n\n0x0100 typically means cover/tape issue or a stale "
+                    "error state. Power-cycle the printer to clear it."
+                )
             QMessageBox.critical(
                 self, "Print failed",
-                f"ptouch (nbuchwitz) exited {rc}\n\n{out.strip()}"
+                f"ptouch (nbuchwitz) exited {rc}\n\n{out.strip()}{hint}"
             )
             return
         self.statusBar().showMessage(

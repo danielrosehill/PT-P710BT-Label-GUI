@@ -1,3 +1,12 @@
+pt-p710bt-label-gui (0.3.0-3) unstable; urgency=medium
+
+  * Better print-failure messages: when libusb returns "cannot open
+    resource" (a transient stuck-handle state after an interrupted job),
+    the error dialog now explicitly tells the user to power-cycle the
+    printer and refresh device info. Same for 0x0100 cover/tape errors.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 01:09:30 +0300
+
 pt-p710bt-label-gui (0.3.0-2) unstable; urgency=medium
 
   * Default to leader-free printing. The GUI now passes --precut to the
