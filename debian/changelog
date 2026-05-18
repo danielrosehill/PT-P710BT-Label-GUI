@@ -1,3 +1,22 @@
+pt-p710bt-label-gui (0.3.0-1) unstable; urgency=medium
+
+  * Release 0.3.0 — proper multi-copy with leader-once-and-cut-between.
+    - Print path migrated from ptouch-print (CLI) to nbuchwitz/ptouch
+      via a downstream fork that adds PT-P710BT support. The new path
+      submits one print job with N raster pages, a single leading edge,
+      and a full cut between each copy — what ptouch-print physically
+      cannot do (it re-finalises per copy, replicating the 24 mm leader).
+    - Side margins (left/right) controllable in mm.
+    - Horizontal preview with dimension arrows showing tape height
+      (12 mm physical, with printable area inset) and label length.
+    - "Fill tape height" toggle; conservative auto-size by default.
+    - Modal font picker with live samples per font, Hebrew samples for
+      Hebrew faces, filter box.
+    - Preview vertical centering uses tight ink bounds so digits / caps
+      no longer drift toward the bottom of the printable area.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 00:16:24 +0300
+
 pt-p710bt-label-gui (0.2.0-9) unstable; urgency=medium
 
   * Remove CUPS backend (the page-size handling kept fighting us).
