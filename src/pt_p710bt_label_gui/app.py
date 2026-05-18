@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 
 from .batch_tab import BatchRow, BatchTab
 from .font_installer import is_installed, migrate_legacy_dir, refresh_cache
+from .font_picker import FontPickerDialog
 from .fonts import DEFAULT_FAMILY, contains_hebrew, grouped, is_hebrew_family
 from .fonts_tab import FontsTab
 from .ptouch import PrintJob, PtouchError, print_job, query_info, render_preview
@@ -153,7 +154,12 @@ class LabelGUI(QMainWindow):
 
         self.font_combo = QComboBox()
         self._populate_font_combo()
-        form.addRow("Font:", self.font_combo)
+        self.font_combo.setVisible(False)  # kept for data lookup; UI uses the picker button
+        self.font_button = QPushButton()
+        self.font_button.setText(DEFAULT_FAMILY)
+        self.font_button.setStyleSheet("text-align: left; padding: 4px 8px;")
+        self.font_button.clicked.connect(self._on_open_font_picker)
+        form.addRow("Font:", self.font_button)
 
         size_align = QHBoxLayout()
         self.font_size = QSpinBox()
@@ -363,6 +369,7 @@ class LabelGUI(QMainWindow):
         self.text_edit.textChanged.connect(self._update_text_direction)
         self.font_combo.currentIndexChanged.connect(self._schedule_preview)
         self.font_combo.currentIndexChanged.connect(self._update_text_direction)
+        self.font_combo.currentIndexChanged.connect(self._sync_font_button)
         self.font_size.valueChanged.connect(self._schedule_preview)
         self.align_combo.currentIndexChanged.connect(self._schedule_preview)
         self.pad.valueChanged.connect(self._schedule_preview)
@@ -408,6 +415,23 @@ class LabelGUI(QMainWindow):
     def _on_log_toggled(self, on: bool) -> None:
         self.preview_log.setVisible(on)
         self.log_toggle.setText(("▾ " if on else "▸ ") + "ptouch-print output")
+
+    def _on_open_font_picker(self) -> None:
+        current = self.font_combo.currentData() or DEFAULT_FAMILY
+        dlg = FontPickerDialog(self, current_family=current)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        family = dlg.selected_family()
+        if not family:
+            return
+        idx = self.font_combo.findData(family)
+        if idx >= 0:
+            self.font_combo.setCurrentIndex(idx)
+        self.font_button.setText(family)
+
+    def _sync_font_button(self) -> None:
+        fam = self.font_combo.currentData() or DEFAULT_FAMILY
+        self.font_button.setText(fam)
 
     def _on_zoom_changed(self) -> None:
         self._zoom = self.zoom_combo.currentData()
@@ -615,7 +639,8 @@ class LabelGUI(QMainWindow):
         text_w = max(widths) if widths else 0
         pad_px = self.pad.value()
         margin_x = max(4, int(tape_px * 0.08))
-        canvas_w = max(int(text_w + 2 * margin_x + pad_px * 2), int(tape_px * 0.5))
+        # Minimum width keeps the preview reading horizontally even when empty.
+        canvas_w = max(int(text_w + 2 * margin_x + pad_px * 2), int(tape_px * 2.5))
         canvas_h = tape_px
 
         img = QImage(canvas_w, canvas_h, QImage.Format.Format_RGB32)
@@ -667,8 +692,11 @@ class LabelGUI(QMainWindow):
             max(1, int(src_h * zoom)), Qt.TransformationMode.SmoothTransformation
         )
         mm_length = src_w / PRINTER_DPI * 25.4
-        mm_height = src_h / PRINTER_DPI * 25.4
-        annotated = self._annotate_label(scaled_label, mm_length, mm_height)
+        mm_printable = src_h / PRINTER_DPI * 25.4
+        # Show the physical tape width as the height dimension — matches what the
+        # user sees in their hand. Printable area is narrower (margin top/bottom).
+        mm_tape = float(self._last_tape_mm)
+        annotated = self._annotate_label(scaled_label, mm_length, mm_tape, mm_printable)
 
         self.preview_label.setPixmap(annotated)
         self.preview_label.setText("")
@@ -676,20 +704,27 @@ class LabelGUI(QMainWindow):
 
         rtl_tag = " · RTL" if self._is_rtl() else ""
         self.preview_meta.setText(
-            f"{src_w}×{src_h} px · {mm_length:.1f} × {mm_height:.1f} mm{rtl_tag}"
+            f"{src_w}×{src_h} px · {mm_length:.1f} mm long · "
+            f"{mm_tape:.0f} mm tape ({mm_printable:.1f} mm printable){rtl_tag}"
         )
 
     @staticmethod
-    def _annotate_label(label_pix: QPixmap, mm_length: float, mm_height: float) -> QPixmap:
-        """Wrap label pixmap with dimension arrows and a mm scale."""
-        lw, lh = label_pix.width(), label_pix.height()
-        left_margin = 56   # vertical "12 mm" dimension on the left
-        right_margin = 16
-        top_margin = 16
-        bottom_margin = 44  # horizontal mm scale on the bottom
+    def _annotate_label(label_pix: QPixmap, mm_length: float,
+                        mm_tape: float, mm_printable: float) -> QPixmap:
+        """Wrap printable label pixmap inside a tape strip, with dimension arrows."""
+        pw, ph = label_pix.width(), label_pix.height()
+        strip_h = int(ph * (mm_tape / mm_printable)) if mm_printable > 0 else ph
+        band_h = max(1, (strip_h - ph) // 2)
+        sw = pw
+        sh = ph + 2 * band_h
 
-        cw = lw + left_margin + right_margin
-        ch = lh + top_margin + bottom_margin
+        left_margin = 60
+        right_margin = 16
+        top_margin = 18
+        bottom_margin = 44
+
+        cw = sw + left_margin + right_margin
+        ch = sh + top_margin + bottom_margin
 
         out = QPixmap(cw, ch)
         out.fill(QColor("#fafafa"))
@@ -697,11 +732,17 @@ class LabelGUI(QMainWindow):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
-        # Draw the label with a thin border (represents the tape strip).
-        lx, ly = left_margin, top_margin
-        p.drawPixmap(lx, ly, label_pix)
+        sx, sy = left_margin, top_margin
+        # Full tape strip background + non-printable bands.
+        p.fillRect(sx, sy, sw, sh, QColor("#ffffff"))
+        p.fillRect(sx, sy, sw, band_h, QColor("#f0f0f0"))
+        p.fillRect(sx, sy + sh - band_h, sw, band_h, QColor("#f0f0f0"))
+        p.drawPixmap(sx, sy + band_h, label_pix)
         p.setPen(QPen(QColor("#888"), 1))
-        p.drawRect(lx, ly, lw, lh)
+        p.drawRect(sx, sy, sw, sh)
+        p.setPen(QPen(QColor("#d0d0d0"), 1, Qt.PenStyle.DotLine))
+        p.drawLine(sx, sy + band_h, sx + sw, sy + band_h)
+        p.drawLine(sx, sy + sh - band_h, sx + sw, sy + sh - band_h)
 
         ann = QPen(QColor("#333"), 1)
         p.setPen(ann)
@@ -710,25 +751,25 @@ class LabelGUI(QMainWindow):
         p.setFont(f)
         fm = QFontMetricsF(f)
 
-        # --- vertical (height) dimension on the left ---
-        ax = lx - 22  # arrow x position
-        p.drawLine(ax, ly, ax, ly + lh)
-        # arrowheads
-        for y, dy in ((ly, 4), (ly + lh, -4)):
+        # --- vertical (tape height) dimension on the left ---
+        ax = sx - 22
+        p.drawLine(ax, sy, ax, sy + sh)
+        for y, dy in ((sy, 4), (sy + sh, -4)):
             p.drawLine(ax, y, ax - 3, y + dy)
             p.drawLine(ax, y, ax + 3, y + dy)
-        # tick marks at tape edges (extend to label)
         p.setPen(QPen(QColor("#bbb"), 1, Qt.PenStyle.DashLine))
-        p.drawLine(ax + 1, ly, lx, ly)
-        p.drawLine(ax + 1, ly + lh, lx, ly + lh)
+        p.drawLine(ax + 1, sy, sx, sy)
+        p.drawLine(ax + 1, sy + sh, sx, sy + sh)
         p.setPen(ann)
-        # label "X mm" rotated vertically
         p.save()
-        p.translate(ax - 8, ly + lh / 2)
+        p.translate(ax - 8, sy + sh / 2)
         p.rotate(-90)
-        txt = f"{mm_height:.1f} mm"
+        txt = f"{mm_tape:.0f} mm tape"
         p.drawText(int(-fm.horizontalAdvance(txt) / 2), int(fm.ascent() / 2), txt)
         p.restore()
+
+        # Aliases used by the bottom-dimension code below.
+        lx, ly, lw, lh = sx, sy, sw, sh
 
         # --- horizontal (length) dimension on the bottom ---
         ay = ly + lh + 18
@@ -773,19 +814,35 @@ class LabelGUI(QMainWindow):
             QMessageBox.warning(self, "Nothing to print",
                                 "Enter text or pick an image first.")
             return
-        try:
-            rc, out = print_job(job)
-        except PtouchError as exc:
-            QMessageBox.critical(self, "Print error", str(exc))
-            return
-        self.preview_log.setPlainText(out.strip() or f"(exit {rc})")
-        if rc == 0:
-            self.statusBar().showMessage("Printed.", 4000)
+        # With auto-cut on, ptouch-print --copies prints all copies as one strip
+        # with a single cut at the end. To get a cut between each label, run
+        # the print invocation once per copy with --copies=1.
+        copies = job.copies
+        auto_cut = self.auto_cut.isChecked()
+        if auto_cut and copies > 1:
+            job.copies = 1
+            runs = copies
         else:
-            QMessageBox.critical(
-                self, "Print failed",
-                f"ptouch-print exited {rc}\n\n{out.strip()}"
-            )
+            runs = 1
+        outs: list[str] = []
+        for i in range(runs):
+            try:
+                rc, out = print_job(job)
+            except PtouchError as exc:
+                QMessageBox.critical(self, "Print error", str(exc))
+                return
+            outs.append(f"# copy {i + 1}/{runs} (exit {rc})\n{out.strip()}")
+            if rc != 0:
+                self.preview_log.setPlainText("\n".join(outs))
+                QMessageBox.critical(
+                    self, "Print failed",
+                    f"ptouch-print exited {rc} on copy {i + 1}/{runs}\n\n{out.strip()}"
+                )
+                return
+        self.preview_log.setPlainText("\n".join(outs))
+        self.statusBar().showMessage(
+            f"Printed {runs} {'copy' if runs == 1 else 'copies'}.", 4000
+        )
 
 
 def main() -> int:

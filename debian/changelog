@@ -1,3 +1,15 @@
+pt-p710bt-label-gui (0.2.0-2) unstable; urgency=medium
+
+  * Preview height dimension now shows the physical tape width (e.g. 12 mm)
+    with the printable area drawn inset; non-printable bands are shaded.
+  * Wider minimum preview width — empty/short labels stay horizontal.
+  * Copies with auto-cut now print as N separate jobs so the cutter fires
+    between each label (previously printed as one long strip).
+  * Font picker replaced with a modal dialog showing live samples in each
+    font face (Hebrew samples for Hebrew fonts) and a filter box.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:15:18 +0300
+
 pt-p710bt-label-gui (0.2.0-1) unstable; urgency=medium
 
   * Release 0.2.0 — Label tab UX overhaul.
