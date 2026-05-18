@@ -72,6 +72,7 @@ class NbJob:
     font_size: int | None = None    # px, or None for auto
     align_h: str = "center"         # left | center | right
     full_cut: bool = True           # PT-P710BT has no half-cut
+    precut: bool = True             # eject the 24mm leader as a scrap before the real label
 
 
 def build_argv(python: str, job: NbJob) -> list[str]:
@@ -86,6 +87,8 @@ def build_argv(python: str, job: NbJob) -> list[str]:
     ]
     if job.full_cut:
         argv.append("--full-cut")
+    if job.precut:
+        argv.append("--precut")
     if job.font:
         argv += ["--font", job.font]
     if job.font_size:

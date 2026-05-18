@@ -1,3 +1,15 @@
+pt-p710bt-label-gui (0.3.0-2) unstable; urgency=medium
+
+  * Default to leader-free printing. The GUI now passes --precut to the
+    nbuchwitz/ptouch backend so the printer ejects the ~24 mm
+    head-to-cutter leader as a small scrap before the real label —
+    matching Brother's official driver behaviour. The actual printed
+    label always comes out with a clean leading edge regardless of
+    copies count.
+  * Requires the patched nbuchwitz/ptouch fork at v2 (precut support).
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 01:04:38 +0300
+
 pt-p710bt-label-gui (0.3.0-1) unstable; urgency=medium
 
   * Release 0.3.0 — proper multi-copy with leader-once-and-cut-between.
