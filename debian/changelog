@@ -1,0 +1,8 @@
+pt-p710bt-label-gui (0.1.0-1) unstable; urgency=medium
+
+  * Initial release.
+    - PyQt6 GUI wrapping ptouch-print
+    - Tape info panel, multi-line text, font/size/alignment controls
+    - Live debounced preview, image insert, chain/precut/cutmark options
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 22:00:00 +0300

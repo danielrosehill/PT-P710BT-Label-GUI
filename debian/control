@@ -1,0 +1,24 @@
+Source: pt-p710bt-label-gui
+Section: utils
+Priority: optional
+Maintainer: Daniel Rosehill <daniel@danielrosehill.co.il>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3-all,
+               python3-setuptools,
+               pybuild-plugin-pyproject
+Standards-Version: 4.6.2
+Homepage: https://github.com/danielrosehill/PT-P710BT-Label-GUI
+Rules-Requires-Root: no
+
+Package: pt-p710bt-label-gui
+Architecture: all
+Depends: ${python3:Depends},
+         ${misc:Depends},
+         python3-pyqt6
+Recommends: ptouch-print
+Description: GUI for the Brother PT-P710BT label printer
+ A PyQt6 desktop GUI that wraps the ptouch-print CLI for the Brother
+ P-Touch Cube (PT-P710BT) on Linux. Provides multi-line text entry,
+ font/alignment controls, live tape preview, chain printing, image
+ insertion, and one-click printing over USB.

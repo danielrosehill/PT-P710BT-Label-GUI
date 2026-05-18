@@ -8,3 +8,15 @@ dist/
 .vscode/
 *.png
 !docs/*.png
+
+# Debian build artefacts (some leak into parent dir; cover in-tree leftovers)
+.pybuild/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/pt-p710bt-label-gui/
+debian/pt-p710bt-label-gui.*.debhelper
+debian/*.substvars
+*.deb
+*.buildinfo
+*.changes

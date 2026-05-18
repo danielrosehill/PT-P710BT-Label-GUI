@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PT-P710BT Label GUI
+GenericName=Label Printer
+Comment=Print labels on the Brother PT-P710BT
+Exec=pt-p710bt-label-gui
+Icon=printer
+Terminal=false
+Categories=Utility;Office;Printing;
+Keywords=label;printer;brother;ptouch;
