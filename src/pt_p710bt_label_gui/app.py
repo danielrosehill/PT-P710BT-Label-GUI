@@ -240,22 +240,7 @@ class LabelGUI(QMainWindow):
         self.precut = QCheckBox("Pre-cut (chain mode only)")
         self.cutmark = QCheckBox("Print cut-mark")
 
-        self.backend_combo = QComboBox()
-        self.backend_combo.addItem("CUPS (recommended)", "cups")
-        self.backend_combo.addItem("ptouch-print (CLI)", "ptouch-print")
-        self.backend_combo.setToolTip(
-            "CUPS routes through the system printer queue using the philpem "
-            "ptouch driver. It supports multi-copy with a single leading "
-            "edge and a full cut between each label.\n\n"
-            "ptouch-print is the fallback CLI; it cannot do leader-once "
-            "with cuts between copies."
-        )
-        # Default to ptouch-print if CUPS queue isn't available.
-        if cups_find_queue() is None:
-            self.backend_combo.setCurrentIndex(1)
-
         form.addRow(self.fill_height)
-        form.addRow("Backend:", self.backend_combo)
         form.addRow(self.auto_cut)
         form.addRow(self.precut)
         form.addRow(self.cutmark)
@@ -895,36 +880,29 @@ class LabelGUI(QMainWindow):
             QMessageBox.warning(self, "Nothing to print",
                                 "Enter text or pick an image first.")
             return
-        backend = self.backend_combo.currentData()
-        if backend == "cups":
-            self._print_via_cups(job)
-        else:
-            self._print_via_ptouch_print(job)
+        self._print_via_cups(job)
 
     def _print_via_cups(self, job: PrintJob) -> None:
-        # 1. Render the label to a PNG via ptouch-print --writepng (single copy).
-        png_copies = job.copies
-        job.copies = 1
-        try:
-            rc, out = render_preview(job, self._preview_path)
-        except PtouchError as exc:
-            QMessageBox.critical(self, "Render error", str(exc))
+        # 1. Render the label PNG ourselves in portrait (W = tape width,
+        #    H = label length), at 180 DPI to match the printer's native res.
+        #    The PNG dimensions are then mirrored in a Custom CUPS PageSize
+        #    so the driver doesn't scale to fit a fixed page.
+        png_w_px, png_h_px = self._render_print_png(job, self._preview_path)
+        if png_w_px == 0 or png_h_px == 0:
+            QMessageBox.critical(self, "Render failed", "Empty label.")
             return
-        if rc != 0 or not self._preview_path.exists():
-            QMessageBox.critical(
-                self, "Render failed",
-                f"ptouch-print --writepng exited {rc}\n\n{out.strip()}"
-            )
-            return
-        # 2. Spool to CUPS — CUPS handles multi-copy with proper cut behaviour.
+        page_w_pt = png_w_px / PRINTER_DPI * 72.0
+        page_h_pt = png_h_px / PRINTER_DPI * 72.0
         auto_cut = self.auto_cut.isChecked()
         cups_job = CupsJob(
             png_path=self._preview_path,
             tape_width_mm=self._last_tape_mm,
-            copies=png_copies,
+            copies=job.copies,
             auto_cut=auto_cut,
             chain_mode=not auto_cut,
             job_title=("label" if not job.lines else " | ".join(job.lines)[:64]),
+            custom_page_w_pt=page_w_pt,
+            custom_page_h_pt=page_h_pt,
         )
         try:
             rc, out, argv = cups_print_job(cups_job)
@@ -941,41 +919,93 @@ class LabelGUI(QMainWindow):
             )
             return
         self.statusBar().showMessage(
-            f"Spooled {png_copies} {'copy' if png_copies == 1 else 'copies'} to CUPS.",
+            f"Spooled {job.copies} {'copy' if job.copies == 1 else 'copies'} to CUPS.",
             4000,
         )
 
-    def _print_via_ptouch_print(self, job: PrintJob) -> None:
-        # Cuts between copies require the printer's ~24 mm head-to-cutter
-        # gap to be fed forward per cut. With auto-cut ON we run N separate
-        # invocations (clean cut per copy, ~24 mm leader on each). With
-        # auto-cut OFF, one invocation with --copies=N --chain.
-        copies = job.copies
-        auto_cut = self.auto_cut.isChecked()
-        if auto_cut and copies > 1:
-            job.copies = 1
-            runs = copies
+    def _render_print_png(self, job: PrintJob, out_png: Path) -> tuple[int, int]:
+        """Render the print PNG in portrait at 180 DPI (W = tape width).
+
+        Returns (width_px, height_px) of the written PNG.
+        """
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QTextOption
+        text = self.text_edit.toPlainText()
+        lines = [ln for ln in text.splitlines() if ln.strip() != ""][:4] or [""]
+        # Tape width in pixels at 180 DPI (full physical tape, not just
+        # printable). The driver maps PageSize → printable area internally.
+        tape_w_px = int(round(self._last_tape_mm / 25.4 * PRINTER_DPI))
+        printable_h = self._last_tape_px  # what ptouch-print reports as printable
+        # Vertical band offset (centre the printable area within the tape width).
+        band = max(0, (tape_w_px - printable_h) // 2)
+
+        # Font sizing — same logic as the soft preview.
+        fill = self.fill_height.isChecked()
+        scale = 0.85 if fill else 0.55
+        if self.font_size.value() > 0:
+            target_px = self.font_size.value()
         else:
-            runs = 1
-        outs: list[str] = []
-        for i in range(runs):
-            try:
-                rc, out = print_job(job)
-            except PtouchError as exc:
-                QMessageBox.critical(self, "Print error", str(exc))
-                return
-            outs.append(f"# copy {i + 1}/{runs} (exit {rc})\n{out.strip()}")
-            if rc != 0:
-                self.preview_log.setPlainText("\n".join(outs))
-                QMessageBox.critical(
-                    self, "Print failed",
-                    f"ptouch-print exited {rc} on copy {i + 1}/{runs}\n\n{out.strip()}"
-                )
-                return
-        self.preview_log.setPlainText("\n".join(outs))
-        self.statusBar().showMessage(
-            f"Printed {copies} {'copy' if copies == 1 else 'copies'}.", 4000
+            target_px = int(printable_h / max(1, len(lines)) * scale)
+        family = self.font_combo.currentData() or DEFAULT_FAMILY
+        font = QFont(family)
+        font.setPixelSize(max(6, target_px))
+        fm = QFontMetricsF(font)
+        line_h = fm.height()
+        widths = [fm.horizontalAdvance(ln) for ln in lines]
+        text_w = int(max(widths) if widths else 0)
+        pad_l = self._margin_px(self.margin_l.value())
+        pad_r = self._margin_px(self.margin_r.value())
+        # Portrait: width = tape, height = label length.
+        content_h_px = max(text_w + pad_l + pad_r, int(tape_w_px * 0.5))
+        img = QImage(tape_w_px, content_h_px, QImage.Format.Format_RGB32)
+        img.fill(QColor("#ffffff"))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        p.setPen(QColor("#000000"))
+        p.setFont(font)
+        # Draw the label horizontally in a virtual canvas, then map to portrait
+        # by rotating the painter -90° about the centre.
+        p.translate(tape_w_px / 2.0, content_h_px / 2.0)
+        p.rotate(-90)
+        # After rotation, the local coordinate system is:
+        #   x ∈ [-content_h/2, +content_h/2]  along the label length
+        #   y ∈ [-tape_w/2, +tape_w/2]        along the tape width
+        # Translate origin to the top-left of the horizontal label.
+        p.translate(-content_h_px / 2.0, -tape_w_px / 2.0)
+        canvas_w, canvas_h = content_h_px, tape_w_px
+
+        align_str = self.align_combo.currentText()
+        flag_h = {
+            "left":   Qt.AlignmentFlag.AlignLeft,
+            "center": Qt.AlignmentFlag.AlignHCenter,
+            "right":  Qt.AlignmentFlag.AlignRight,
+        }[align_str]
+        rtl = self._is_rtl()
+        opt = QTextOption()
+        opt.setAlignment(flag_h | Qt.AlignmentFlag.AlignTop)
+        opt.setTextDirection(
+            Qt.LayoutDirection.RightToLeft if rtl else Qt.LayoutDirection.LeftToRight
         )
+        opt.setWrapMode(QTextOption.WrapMode.NoWrap)
+
+        sample = next((ln for ln in lines if ln.strip()), "Mg")
+        ink = fm.tightBoundingRect(sample)
+        if ink.height() <= 0:
+            ink = fm.tightBoundingRect("Mg")
+        n = len(lines)
+        block_h = (n - 1) * line_h + ink.height()
+        block_top = band + (printable_h - block_h) / 2  # centred in printable area
+        first_baseline = block_top - ink.y()
+
+        for i, ln in enumerate(lines):
+            baseline = first_baseline + i * line_h
+            rect_y = baseline - fm.ascent()
+            rect = QRectF(pad_l, rect_y, canvas_w - pad_l - pad_r, line_h)
+            p.drawText(rect, ln, opt)
+        p.end()
+        img.save(str(out_png), "PNG")
+        return tape_w_px, content_h_px
 
 
 def main() -> int:

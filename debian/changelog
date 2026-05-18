@@ -1,3 +1,16 @@
+pt-p710bt-label-gui (0.2.0-8) unstable; urgency=medium
+
+  * Drop the backend selector — CUPS is now the only print path. The
+    GUI requires the philpem printer-driver-ptouch with a configured
+    PT-P710BT CUPS queue.
+  * Fix CUPS scaling: render the print PNG ourselves in portrait
+    orientation (W = tape width, H = label length) at the printer's
+    native 180 DPI, then pass a Custom CUPS PageSize matching the
+    PNG exactly so the driver doesn't scale to the PPD's fixed
+    100 mm page length.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 00:01:45 +0300
+
 pt-p710bt-label-gui (0.2.0-7) unstable; urgency=medium
 
   * Add CUPS print backend via the philpem ptouch driver

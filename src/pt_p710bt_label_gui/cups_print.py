@@ -75,37 +75,33 @@ def is_available() -> bool:
 
 @dataclass
 class CupsJob:
-    png_path: Path                 # rendered label PNG (mono or RGB)
-    tape_width_mm: int             # 12 for 12mm tape
-    copies: int = 1                # CUPS -n
-    auto_cut: bool = True          # AutoCut
-    chain_mode: bool = False       # if True → AutoEject=False (no eject; chain)
-    extra_margin_mm: int = 0       # ExtraMargin
-    mirror: bool = False           # MirrorPrint
+    png_path: Path                       # rendered label PNG, pre-rotated to portrait
+    tape_width_mm: int                   # 12 for 12mm tape
+    copies: int = 1                      # CUPS -n
+    auto_cut: bool = True                # AutoCut
+    chain_mode: bool = False             # if True → AutoEject=False (no eject)
+    extra_margin_mm: int = 0             # ExtraMargin
+    mirror: bool = False                 # MirrorPrint
     job_title: str = "label"
-
-
-_TAPE_PAGE = {
-    3.5: "tz-4",  # PPD uses "tz-4" for 3.5mm (per the lpoptions dump)
-    6: "tz-6",
-    9: "tz-9",
-    12: "tz-12",
-    18: "tz-18",
-    24: "tz-24",
-}
-
-
-def _page_size(mm: int) -> str:
-    return _TAPE_PAGE.get(mm, "tz-12")
+    custom_page_w_pt: float | None = None  # narrow side (tape width) in points
+    custom_page_h_pt: float | None = None  # long side (label length) in points
 
 
 def build_argv(queue: str, job: CupsJob) -> list[str]:
     argv = ["lp", "-d", queue, "-t", job.job_title, "-n", str(job.copies)]
-    argv += ["-o", f"PageSize={_page_size(job.tape_width_mm)}"]
+    # Custom PageSize matching the PNG's exact pixel dimensions (at 180 DPI)
+    # avoids the PPD's fixed-length pages scaling our label up. The PT-P710BT
+    # CUPS page is portrait (W = tape width, H = label length), so the caller
+    # must pre-rotate the PNG.
+    if job.custom_page_w_pt and job.custom_page_h_pt:
+        argv += [
+            "-o",
+            f"media=Custom.{job.custom_page_w_pt:.2f}x{job.custom_page_h_pt:.2f}pt",
+        ]
     argv += ["-o", f"AutoCut={'True' if job.auto_cut else 'False'}"]
-    # AutoEject controls chain printing in the philpem PPD:
+    # AutoEject in the philpem PPD = chain printing toggle:
     #   AutoEject=True  → tape ejects after each label (default)
-    #   AutoEject=False → chain mode (no per-label eject; labels back-to-back)
+    #   AutoEject=False → chain mode (no per-label eject)
     argv += ["-o", f"AutoEject={'False' if job.chain_mode else 'True'}"]
     if job.extra_margin_mm:
         argv += ["-o", f"ExtraMargin={job.extra_margin_mm}mm"]
