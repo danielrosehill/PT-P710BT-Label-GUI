@@ -1,3 +1,14 @@
+pt-p710bt-label-gui (0.2.0-4) unstable; urgency=medium
+
+  * Multi-copy print now uses chain + precut + --copies=N in a single
+    ptouch-print invocation, so the printer's ~24 mm leading-edge bleed
+    happens once for the whole batch instead of being replicated per copy.
+    Cuts still fire between labels. No final cut — pull/manual-cut the
+    last label off.
+  * Tooltip on the Copies field explains the chain-mode behaviour.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:23:38 +0300
+
 pt-p710bt-label-gui (0.2.0-3) unstable; urgency=medium
 
   * Fix soft preview vertical centering: text was drifting toward the bottom
