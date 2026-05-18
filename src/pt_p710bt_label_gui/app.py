@@ -1,4 +1,4 @@
-"""PyQt6 main window for PT-P710BT label GUI."""
+"""PyQt6 main window for the PT-P710BT label GUI — tabbed layout."""
 from __future__ import annotations
 
 import shlex
@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QPixmap
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,13 +24,14 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from .font_install_dialog import FontInstallDialog
 from .font_installer import is_installed
-from .fonts import DEFAULT_FAMILY, grouped
+from .fonts import DEFAULT_FAMILY, FONTS, grouped
+from .fonts_tab import FontsTab
 from .ptouch import PrintJob, PtouchError, print_job, query_info, render_preview
 
 
@@ -42,91 +43,49 @@ class LabelGUI(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("PT-P710BT Label GUI")
-        self.resize(1100, 600)
+        self.resize(1180, 720)
 
         self._tmpdir = Path(tempfile.mkdtemp(prefix="pt-p710bt-"))
         self._preview_path = self._tmpdir / "preview.png"
         self._last_tape_px: int = DEFAULT_FALLBACK_TAPE_PX
         self._printer_online: bool = False
+        self._last_info_raw: str = ""
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(PREVIEW_DEBOUNCE_MS)
         self._debounce.timeout.connect(self._do_preview)
 
-        self._build_ui()
-        self._build_menu()
+        self._build_tabs()
         self._wire_signals()
         self.refresh_info()
         self._schedule_preview()
 
-    def _build_menu(self) -> None:
-        m_tools = self.menuBar().addMenu("&Tools")
-        act_install = QAction("Install Google Fonts…", self)
-        act_install.triggered.connect(self._open_font_installer)
-        m_tools.addAction(act_install)
-        act_refresh_fonts = QAction("Refresh font list", self)
-        act_refresh_fonts.triggered.connect(self._refresh_font_list)
-        m_tools.addAction(act_refresh_fonts)
+    # ---------- Tab construction ----------
 
-    def _open_font_installer(self) -> None:
-        dlg = FontInstallDialog(self)
-        dlg.exec()
-        self._refresh_font_list()
+    def _build_tabs(self) -> None:
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
 
-    def _refresh_font_list(self) -> None:
-        current = self.font_combo.currentData() or DEFAULT_FAMILY
-        self._populate_font_combo()
-        idx = self.font_combo.findData(current)
-        if idx >= 0:
-            self.font_combo.setCurrentIndex(idx)
-        self._schedule_preview()
+        self.tabs.addTab(self._build_label_tab(),   "Label")
+        self.tabs.addTab(self._build_printer_tab(), "Printer")
+        self.tabs.addTab(self._build_tape_tab(),    "Tape")
+        self.fonts_tab = FontsTab()
+        self.fonts_tab.fonts_changed.connect(self._refresh_font_list)
+        self.tabs.addTab(self.fonts_tab,            "Fonts")
 
-    def _populate_font_combo(self) -> None:
-        self.font_combo.blockSignals(True)
-        self.font_combo.clear()
-        for label, entries in grouped():
-            # category separator
-            self.font_combo.addItem(f"── {label} ──")
-            self.font_combo.model().item(self.font_combo.count() - 1).setEnabled(False)
-            for e in entries:
-                tag = "" if is_installed(e.family) else "  (not installed)"
-                self.font_combo.addItem(f"{e.display}{tag}", userData=e.family)
-        # select default
-        idx = self.font_combo.findData(DEFAULT_FAMILY)
-        if idx >= 0:
-            self.font_combo.setCurrentIndex(idx)
-        self.font_combo.blockSignals(False)
+        self.setStatusBar(QStatusBar())
 
-    # ---------- UI construction ----------
+    # ----- Label tab (the main work area) -----
 
-    def _build_ui(self) -> None:
-        central = QWidget()
-        self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+    def _build_label_tab(self) -> QWidget:
+        w = QWidget()
+        root = QHBoxLayout(w)
 
-        # ---- Left: controls ----
+        # Left column: input controls
         left = QVBoxLayout()
         root.addLayout(left, 0)
 
-        # Tape info panel
-        info_box = QGroupBox("Tape")
-        info_layout = QFormLayout(info_box)
-        self.info_status = QLabel("—")
-        self.info_width = QLabel("—")
-        self.info_media = QLabel("—")
-        self.info_colors = QLabel("—")
-        self.info_error = QLabel("—")
-        info_layout.addRow("Printer:", self.info_status)
-        info_layout.addRow("Tape width:", self.info_width)
-        info_layout.addRow("Media:", self.info_media)
-        info_layout.addRow("Colors:", self.info_colors)
-        info_layout.addRow("Error:", self.info_error)
-        self.refresh_btn = QPushButton("Refresh tape info")
-        info_layout.addRow(self.refresh_btn)
-        left.addWidget(info_box)
-
-        # Text
         text_box = QGroupBox("Text (up to 4 lines)")
         text_layout = QVBoxLayout(text_box)
         self.text_edit = QPlainTextEdit()
@@ -135,11 +94,19 @@ class LabelGUI(QMainWindow):
         text_layout.addWidget(self.text_edit)
         left.addWidget(text_box)
 
-        # Font / layout
+        # Format
         fmt_box = QGroupBox("Format")
         fmt_layout = QFormLayout(fmt_box)
+        font_row = QHBoxLayout()
         self.font_combo = QComboBox()
         self._populate_font_combo()
+        self.manage_fonts_btn = QPushButton("Manage…")
+        self.manage_fonts_btn.setToolTip("Open the Fonts tab to install / update.")
+        font_row.addWidget(self.font_combo, 1)
+        font_row.addWidget(self.manage_fonts_btn)
+        font_row_wrap = QWidget()
+        font_row_wrap.setLayout(font_row)
+        font_row.setContentsMargins(0, 0, 0, 0)
         self.font_size = QSpinBox()
         self.font_size.setRange(0, 200)
         self.font_size.setValue(0)
@@ -147,7 +114,7 @@ class LabelGUI(QMainWindow):
         self.align_combo = QComboBox()
         self.align_combo.addItems(["left", "center", "right"])
         self.align_combo.setCurrentIndex(1)
-        fmt_layout.addRow("Font:", self.font_combo)
+        fmt_layout.addRow("Font:", font_row_wrap)
         fmt_layout.addRow("Font size (px):", self.font_size)
         fmt_layout.addRow("Align:", self.align_combo)
         left.addWidget(fmt_box)
@@ -166,7 +133,7 @@ class LabelGUI(QMainWindow):
         self.auto_cut.setToolTip(
             "When OFF, passes --chain to ptouch-print (continuous tape, no cut)."
         )
-        self.precut = QCheckBox("Pre-cut (cut before label, chain mode only)")
+        self.precut = QCheckBox("Pre-cut (chain mode only)")
         self.cutmark = QCheckBox("Print cut-mark")
         opts_layout.addRow("Copies:", self.copies)
         opts_layout.addRow("Padding (px):", self.pad)
@@ -187,25 +154,27 @@ class LabelGUI(QMainWindow):
         img_layout.addWidget(self.image_clear)
         left.addWidget(img_box)
 
-        # Action buttons
+        # Actions
         action_row = QHBoxLayout()
         self.show_cmd_btn = QPushButton("Show command")
         self.print_btn = QPushButton("Print")
-        self.print_btn.setStyleSheet("font-weight: bold;")
+        self.print_btn.setStyleSheet("font-weight: bold; padding: 6px 18px;")
         action_row.addWidget(self.show_cmd_btn)
         action_row.addStretch(1)
         action_row.addWidget(self.print_btn)
         left.addLayout(action_row)
         left.addStretch(1)
 
-        # ---- Right: preview ----
+        # Right column: preview
         right = QVBoxLayout()
         root.addLayout(right, 1)
-        right.addWidget(QLabel("Preview (actual tape height, scaled to fit width):"))
+        right.addWidget(QLabel("Preview (actual tape height, scaled to width):"))
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumHeight(120)
-        self.preview_label.setStyleSheet("background: #222; color: #888; border: 1px solid #444;")
+        self.preview_label.setStyleSheet(
+            "background: #222; color: #888; border: 1px solid #444;"
+        )
         self.preview_label.setText("(no preview yet)")
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -218,10 +187,87 @@ class LabelGUI(QMainWindow):
         self.preview_log.setPlaceholderText("ptouch-print output appears here")
         right.addWidget(self.preview_log)
 
-        self.setStatusBar(QStatusBar())
+        return w
+
+    # ----- Printer tab -----
+
+    def _build_printer_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        box = QGroupBox("Printer connection")
+        form = QFormLayout(box)
+        self.p_status = QLabel("—")
+        self.p_dpi = QLabel("—")
+        self.p_max_px = QLabel("—")
+        form.addRow("Status:", self.p_status)
+        form.addRow("Resolution:", self.p_dpi)
+        form.addRow("Max print width:", self.p_max_px)
+        layout.addWidget(box)
+
+        info_box = QGroupBox("Raw ptouch-print --info output")
+        info_layout = QVBoxLayout(info_box)
+        self.p_raw = QPlainTextEdit()
+        self.p_raw.setReadOnly(True)
+        self.p_raw.setMaximumHeight(220)
+        self.p_raw.setStyleSheet("font-family: monospace;")
+        info_layout.addWidget(self.p_raw)
+        layout.addWidget(info_box)
+
+        self.p_refresh_btn = QPushButton("Refresh printer info")
+        layout.addWidget(self.p_refresh_btn)
+        layout.addStretch(1)
+
+        notes = QLabel(
+            "<i>Printer is queried via <code>ptouch-print --info</code> over USB. "
+            "If the printer is offline, the Label preview falls back to the last "
+            "known tape width.</i>"
+        )
+        notes.setWordWrap(True)
+        layout.addWidget(notes)
+        return w
+
+    # ----- Tape tab -----
+
+    def _build_tape_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        box = QGroupBox("Detected tape")
+        form = QFormLayout(box)
+        self.t_width = QLabel("—")
+        self.t_usable = QLabel("—")
+        self.t_media = QLabel("—")
+        self.t_tape_color = QLabel("—")
+        self.t_text_color = QLabel("—")
+        self.t_error = QLabel("—")
+        form.addRow("Cassette width:", self.t_width)
+        form.addRow("Usable print height:", self.t_usable)
+        form.addRow("Media type:", self.t_media)
+        form.addRow("Tape colour:", self.t_tape_color)
+        form.addRow("Text colour:", self.t_text_color)
+        form.addRow("Error byte:", self.t_error)
+        layout.addWidget(box)
+
+        self.t_refresh_btn = QPushButton("Refresh tape info")
+        layout.addWidget(self.t_refresh_btn)
+
+        layout.addWidget(QLabel(
+            "<i>0x0000 = ready. 0x0100 typically indicates a cover/tape issue. "
+            "After interruptions a power-cycle may be needed to clear errors.</i>"
+        ))
+        layout.addStretch(1)
+        return w
+
+    # ---------- Wiring ----------
 
     def _wire_signals(self) -> None:
-        self.refresh_btn.clicked.connect(self.refresh_info)
+        self.p_refresh_btn.clicked.connect(self.refresh_info)
+        self.t_refresh_btn.clicked.connect(self.refresh_info)
+        self.manage_fonts_btn.clicked.connect(
+            lambda: self.tabs.setCurrentWidget(self.fonts_tab)
+        )
+
         self.text_edit.textChanged.connect(self._schedule_preview)
         self.font_combo.currentIndexChanged.connect(self._schedule_preview)
         self.font_size.valueChanged.connect(self._schedule_preview)
@@ -230,12 +276,37 @@ class LabelGUI(QMainWindow):
         self.cutmark.toggled.connect(self._schedule_preview)
         self.auto_cut.toggled.connect(self._schedule_preview)
         self.image_path.textChanged.connect(self._schedule_preview)
+
         self.image_browse.clicked.connect(self._on_browse_image)
         self.image_clear.clicked.connect(lambda: self.image_path.setText(""))
         self.show_cmd_btn.clicked.connect(self._on_show_cmd)
         self.print_btn.clicked.connect(self._on_print)
 
-    # ---------- Helpers ----------
+    # ---------- Font dropdown ----------
+
+    def _populate_font_combo(self) -> None:
+        self.font_combo.blockSignals(True)
+        self.font_combo.clear()
+        for label, entries in grouped():
+            self.font_combo.addItem(f"── {label} ──")
+            self.font_combo.model().item(self.font_combo.count() - 1).setEnabled(False)
+            for e in entries:
+                tag = "" if is_installed(e.family) else "  (not installed)"
+                self.font_combo.addItem(f"{e.display}{tag}", userData=e.family)
+        idx = self.font_combo.findData(DEFAULT_FAMILY)
+        if idx >= 0:
+            self.font_combo.setCurrentIndex(idx)
+        self.font_combo.blockSignals(False)
+
+    def _refresh_font_list(self) -> None:
+        current = self.font_combo.currentData() or DEFAULT_FAMILY
+        self._populate_font_combo()
+        idx = self.font_combo.findData(current)
+        if idx >= 0:
+            self.font_combo.setCurrentIndex(idx)
+        self._schedule_preview()
+
+    # ---------- Job + preview ----------
 
     def _current_job(self, *, for_preview: bool) -> PrintJob:
         text = self.text_edit.toPlainText()
@@ -270,32 +341,53 @@ class LabelGUI(QMainWindow):
             info = query_info()
         except PtouchError as exc:
             self._printer_online = False
-            self.info_status.setText(f"<b style='color:#c33'>missing dependency</b>")
+            self._update_printer_view(found=False, err=str(exc), info=None)
             self.statusBar().showMessage(str(exc), 8000)
             return
+        self._last_info_raw = info.raw
         if info.found:
             self._printer_online = True
-            self.info_status.setText("<b style='color:#2a8'>connected</b>")
             if info.tape_width_px:
                 self._last_tape_px = info.tape_width_px
-            self.info_width.setText(
-                f"{info.media_width_mm or '?'} mm  ({info.tape_width_px or '?'} px usable)"
-            )
-            self.info_media.setText(info.media_type or "—")
-            self.info_colors.setText(
-                f"tape {info.tape_color or '?'} / text {info.text_color or '?'}"
-            )
-            err = info.error_code or "—"
-            color = "#2a8" if err == "0x0000" else "#c33"
-            self.info_error.setText(f"<span style='color:{color}'>{err}</span>")
         else:
             self._printer_online = False
-            self.info_status.setText("<b style='color:#c33'>not detected</b>")
-            self.info_width.setText(f"offline preview at {self._last_tape_px} px")
-            self.info_media.setText("—")
-            self.info_colors.setText("—")
-            self.info_error.setText("—")
+        self._update_printer_view(found=info.found, err=None, info=info)
         self._schedule_preview()
+
+    def _update_printer_view(self, *, found: bool, err: str | None, info) -> None:
+        # Printer tab
+        if err:
+            self.p_status.setText(f"<b style='color:#c33'>{err}</b>")
+        elif found:
+            self.p_status.setText("<b style='color:#2a8'>connected (USB)</b>")
+        else:
+            self.p_status.setText("<b style='color:#c33'>not detected</b>")
+        if info:
+            self.p_dpi.setText(f"{info.dpi or '?'} dpi")
+            self.p_max_px.setText(f"{info.max_width_px or '?'} px")
+            self.p_raw.setPlainText(info.raw)
+        else:
+            self.p_dpi.setText("—")
+            self.p_max_px.setText("—")
+            self.p_raw.setPlainText("")
+
+        # Tape tab
+        if info and info.found:
+            self.t_width.setText(f"{info.media_width_mm or '?'} mm")
+            self.t_usable.setText(f"{info.tape_width_px or '?'} px")
+            self.t_media.setText(info.media_type or "—")
+            self.t_tape_color.setText(info.tape_color or "—")
+            self.t_text_color.setText(info.text_color or "—")
+            color = "#2a8" if info.error_code == "0x0000" else "#c33"
+            self.t_error.setText(
+                f"<span style='color:{color}; font-family:monospace'>"
+                f"{info.error_code or '—'}</span>"
+            )
+        else:
+            self.t_width.setText(f"<i>offline — using {self._last_tape_px} px</i>")
+            for w in (self.t_usable, self.t_media, self.t_tape_color,
+                      self.t_text_color, self.t_error):
+                w.setText("—")
 
     def _do_preview(self) -> None:
         job = self._current_job(for_preview=True)
@@ -308,7 +400,6 @@ class LabelGUI(QMainWindow):
         if rc == 0 and self._preview_path.exists():
             pix = QPixmap(str(self._preview_path))
             if not pix.isNull():
-                # Scale to fit label width while preserving aspect ratio.
                 target_w = max(400, self.preview_label.width() - 16)
                 scaled = pix.scaledToWidth(
                     target_w, Qt.TransformationMode.SmoothTransformation
@@ -328,22 +419,19 @@ class LabelGUI(QMainWindow):
     def _on_show_cmd(self) -> None:
         job = self._current_job(for_preview=False)
         argv = job.argv()
-        QMessageBox.information(
-            self,
-            "ptouch-print invocation",
-            shlex.join(argv),
-        )
+        QMessageBox.information(self, "ptouch-print invocation", shlex.join(argv))
 
     def _on_print(self) -> None:
         if not self._printer_online:
             QMessageBox.warning(
                 self, "Printer offline",
-                "Printer not detected. Click 'Refresh tape info' first."
+                "Printer not detected. Switch to the Printer tab and refresh."
             )
             return
         job = self._current_job(for_preview=False)
         if not job.lines and not job.image:
-            QMessageBox.warning(self, "Nothing to print", "Enter text or pick an image first.")
+            QMessageBox.warning(self, "Nothing to print",
+                                "Enter text or pick an image first.")
             return
         try:
             rc, out = print_job(job)

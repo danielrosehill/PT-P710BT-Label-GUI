@@ -1,3 +1,20 @@
+pt-p710bt-label-gui (0.1.0-3) unstable; urgency=medium
+
+  * Restructured the GUI into tabs (was: single overloaded window).
+    - Label tab: text input, format, options, image, live preview, Print.
+    - Printer tab: connection status, dpi, max width, raw --info dump.
+    - Tape tab: width / usable px / media / colours / error byte, all on
+      their own surface with explanatory note.
+    - Fonts tab: top-level — replaces the buried Tools menu. Curated font
+      table with installed/missing badges, "Install missing" /
+      "Reinstall all" buttons, threaded progress + log.
+  * Label tab font row now has a "Manage…" button that jumps to the
+    Fonts tab — the install path is two clicks from anywhere.
+  * Dropped the modal font installer dialog (FontInstallDialog) and the
+    Tools menu — superseded by the Fonts tab.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:00:00 +0300
+
 pt-p710bt-label-gui (0.1.0-2) unstable; urgency=medium
 
   * Curated Google Fonts library (30 fonts incl. Heebo for Hebrew).
