@@ -40,7 +40,7 @@ from .font_picker import FontPickerDialog
 from .fonts import DEFAULT_FAMILY, contains_hebrew, grouped, is_hebrew_family
 from .fonts_tab import FontsTab
 from .ptouch import PrintJob, PtouchError, query_info, render_preview
-from .ptouch_nb import NbJob
+from .ptouch_nb import NbJob, cut_tape
 from .ptouch_nb import print_job as nb_print_job
 
 
@@ -263,6 +263,13 @@ class LabelGUI(QMainWindow):
         self.show_cmd_btn = QToolButton()
         self.show_cmd_btn.setText("Show command")
         self.show_cmd_btn.setAutoRaise(True)
+        self.cut_tape_btn = QToolButton()
+        self.cut_tape_btn.setText("✂ Cut tape")
+        self.cut_tape_btn.setAutoRaise(True)
+        self.cut_tape_btn.setToolTip(
+            "Feed the tape forward to the cutter and chop off whatever is "
+            "sticking out (≈24 mm). No printing — just a cut."
+        )
         self.print_btn = QPushButton("Print")
         self.print_btn.setDefault(True)
         self.print_btn.setStyleSheet(
@@ -272,6 +279,7 @@ class LabelGUI(QMainWindow):
             "QPushButton:disabled { background: #888; }"
         )
         action_row.addWidget(self.show_cmd_btn)
+        action_row.addWidget(self.cut_tape_btn)
         action_row.addStretch(1)
         action_row.addWidget(self.print_btn)
         left.addLayout(action_row)
@@ -418,6 +426,7 @@ class LabelGUI(QMainWindow):
         self.image_browse.clicked.connect(self._on_browse_image)
         self.image_clear.clicked.connect(lambda: self.image_path.setText(""))
         self.show_cmd_btn.clicked.connect(self._on_show_cmd)
+        self.cut_tape_btn.clicked.connect(self._on_cut_tape)
         self.print_btn.clicked.connect(self._on_print)
 
         self.log_toggle.toggled.connect(self._on_log_toggled)
@@ -866,6 +875,20 @@ class LabelGUI(QMainWindow):
         job = self._current_job(for_preview=False)
         argv = job.argv()
         QMessageBox.information(self, "ptouch-print invocation", shlex.join(argv))
+
+    def _on_cut_tape(self) -> None:
+        if not self._printer_online:
+            QMessageBox.warning(
+                self, "Printer offline",
+                "Printer not detected. Switch to the Device tab and refresh."
+            )
+            return
+        rc, out = cut_tape(self._last_tape_mm)
+        self.preview_log.setPlainText(f"(exit {rc})\n{out.strip()}")
+        if rc != 0:
+            QMessageBox.critical(self, "Cut failed", out.strip() or "Unknown error")
+            return
+        self.statusBar().showMessage("Tape cut.", 3000)
 
     def _on_print(self) -> None:
         if not self._printer_online:

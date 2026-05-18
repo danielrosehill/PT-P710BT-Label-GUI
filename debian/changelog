@@ -1,3 +1,11 @@
+pt-p710bt-label-gui (0.3.0-6) unstable; urgency=medium
+
+  * New "✂ Cut tape" button on the Label tab — feeds and cuts the tape
+    without printing, useful for chopping off the leader sticking out
+    after a print (≈24 mm).
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 01:21:55 +0300
+
 pt-p710bt-label-gui (0.3.0-5) unstable; urgency=medium
 
   * Fix "USB write incomplete: 384/4155 bytes written" errors on the

@@ -144,6 +144,28 @@ def _print_with_reset_retry(printer_class, job: NbJob, *, attempts: int = 2):
         raise last_exc
 
 
+def cut_tape(tape_width_mm: float) -> tuple[int, str]:
+    """Send a feed-and-cut command — no printing. Returns (rc, log)."""
+    try:
+        tape = _tape(tape_width_mm)
+    except NbPtouchError as exc:
+        return 1, str(exc)
+    try:
+        printer = _print_with_reset_retry(PTP710BT, None)
+    except PrinterConnectionError as exc:
+        return 1, str(exc)
+    try:
+        printer.precut(tape)
+        return 0, "Tape cut."
+    except Exception as exc:
+        return 1, f"Error: {exc}"
+    finally:
+        try:
+            printer.disconnect()
+        except Exception:
+            pass
+
+
 def print_job(job: NbJob) -> tuple[int, str]:
     """Run a multi-label print. Returns (exit_code, log_text)."""
     log_lines: list[str] = []
