@@ -1,3 +1,31 @@
+pt-p710bt-label-gui (0.1.0-6) unstable; urgency=medium
+
+  * UI overhaul on the Label tab: soft Qt-rendered preview by default (smooth,
+    anti-aliased) with an "Exact (pixel-accurate)" toggle that falls back to
+    ptouch-print --writepng for the printer-accurate rendering.
+  * Preview now has a zoom selector (100% / 200% / 300% / 400% / 600% / 800%)
+    instead of always upscaling to canvas width — fixes the giant pixellated
+    look. Background switched to light "tape" off-white with a thin border.
+  * Status pill at top of Label tab: live ● Printer / tape width / ready
+    indicator so device state is visible without tab-switching.
+  * Format + Print options consolidated into one tighter group. Print button
+    is now the primary accent-coloured action. "ptouch-print output" log
+    collapsed behind a disclosure toggle.
+  * Printer and Tape tabs merged into a single "Device" tab.
+  * New "Batch" tab: queue rows of (text, copies); buttons for new row,
+    duplicate, delete, clear, save manifest, import manifest (JSON).
+    Threaded run with progress bar and cancel. Format settings come from
+    the Label tab so the whole batch shares font/cut/etc.
+  * Added 9 Hebrew Google Fonts: Heebo, Assistant, Noto Sans Hebrew, Noto
+    Serif Hebrew, Frank Ruhl Libre, David Libre, Suez One, Secular One,
+    Miriam Libre, Bellefair.
+  * Automatic RTL layout: when a Hebrew-category font is selected or when
+    Hebrew characters are typed, the text input flips to right-aligned RTL
+    and the soft preview uses Qt's bidi-aware text layout. Preview meta
+    line shows "· RTL" when active.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 22:55:00 +0300
+
 pt-p710bt-label-gui (0.1.0-5) unstable; urgency=medium
 
   * Fix: font-installed detection was always returning false, so every font

@@ -44,7 +44,33 @@ FONTS: list[FontEntry] = [
     FontEntry("Urbanist",             "Urbanist",             "urbanist",             "sans"),
     FontEntry("Cinzel",               "Cinzel",               "cinzel",               "display"),
     FontEntry("Heebo",                "Heebo",                "heebo",                "hebrew"),
+    FontEntry("Assistant",            "Assistant",            "assistant",            "hebrew"),
+    FontEntry("Noto Sans Hebrew",     "Noto Sans Hebrew",     "noto-sans-hebrew",     "hebrew"),
+    FontEntry("Noto Serif Hebrew",    "Noto Serif Hebrew",    "noto-serif-hebrew",    "hebrew"),
+    FontEntry("Frank Ruhl Libre",     "Frank Ruhl Libre",     "frank-ruhl-libre",     "hebrew"),
+    FontEntry("David Libre",          "David Libre",          "david-libre",          "hebrew"),
+    FontEntry("Suez One",             "Suez One",             "suez-one",             "hebrew"),
+    FontEntry("Secular One",          "Secular One",          "secular-one",          "hebrew"),
+    FontEntry("Miriam Libre",         "Miriam Libre",         "miriam-libre",         "hebrew"),
+    FontEntry("Bellefair",            "Bellefair",            "bellefair",            "hebrew"),
 ]
+
+
+def is_hebrew_family(family: str) -> bool:
+    """Whether this font family is in the Hebrew category (RTL hint)."""
+    for f in FONTS:
+        if f.family == family and f.category == "hebrew":
+            return True
+    return False
+
+
+def contains_hebrew(text: str) -> bool:
+    """Detect Hebrew unicode block (U+0590..U+05FF) or presentation forms (U+FB1D..U+FB4F)."""
+    for ch in text:
+        cp = ord(ch)
+        if 0x0590 <= cp <= 0x05FF or 0xFB1D <= cp <= 0xFB4F:
+            return True
+    return False
 
 DEFAULT_FAMILY = "IBM Plex Sans"
 

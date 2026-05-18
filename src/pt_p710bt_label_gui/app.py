@@ -1,18 +1,20 @@
-"""PyQt6 main window for the PT-P710BT label GUI — tabbed layout."""
+"""PyQt6 main window for the PT-P710BT label GUI."""
 from __future__ import annotations
 
 import shlex
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -22,34 +24,49 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStatusBar,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from .batch_tab import BatchRow, BatchTab
 from .font_installer import is_installed, migrate_legacy_dir, refresh_cache
-from .fonts import DEFAULT_FAMILY, FONTS, grouped
+from .fonts import DEFAULT_FAMILY, contains_hebrew, grouped, is_hebrew_family
 from .fonts_tab import FontsTab
 from .ptouch import PrintJob, PtouchError, print_job, query_info, render_preview
 
 
 PREVIEW_DEBOUNCE_MS = 350
 DEFAULT_FALLBACK_TAPE_PX = 76  # 12mm
+PRINTER_DPI = 180
+
+
+@dataclass
+class PreviewMeta:
+    pixel_width: int
+    pixel_height: int
+    mm_length: float
+    mm_width: float
 
 
 class LabelGUI(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("PT-P710BT Label GUI")
-        self.resize(1180, 720)
+        self.resize(1180, 760)
 
         self._tmpdir = Path(tempfile.mkdtemp(prefix="pt-p710bt-"))
         self._preview_path = self._tmpdir / "preview.png"
         self._last_tape_px: int = DEFAULT_FALLBACK_TAPE_PX
+        self._last_tape_mm: int = 12
         self._printer_online: bool = False
         self._last_info_raw: str = ""
+        self._zoom: int = 300  # percent
+        self._exact_mode: bool = False
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -68,6 +85,7 @@ class LabelGUI(QMainWindow):
                 6000,
             )
         self.refresh_info()
+        self._update_text_direction()
         self._schedule_preview()
 
     # ---------- Tab construction ----------
@@ -76,46 +94,68 @@ class LabelGUI(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        self.tabs.addTab(self._build_label_tab(),   "Label")
-        self.tabs.addTab(self._build_printer_tab(), "Printer")
-        self.tabs.addTab(self._build_tape_tab(),    "Tape")
+        self.tabs.addTab(self._build_label_tab(),  "Label")
+        self.batch_tab = BatchTab(
+            job_factory=self._batch_job_factory,
+            printer_online=lambda: self._printer_online,
+        )
+        self.tabs.addTab(self.batch_tab, "Batch")
+        self.tabs.addTab(self._build_device_tab(), "Device")
         self.fonts_tab = FontsTab()
         self.fonts_tab.fonts_changed.connect(self._refresh_font_list)
-        self.tabs.addTab(self.fonts_tab,            "Fonts")
+        self.tabs.addTab(self.fonts_tab, "Fonts")
 
         self.setStatusBar(QStatusBar())
 
-    # ----- Label tab (the main work area) -----
+    # ----- Label tab -----
 
     def _build_label_tab(self) -> QWidget:
         w = QWidget()
-        root = QHBoxLayout(w)
+        root = QVBoxLayout(w)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(8)
 
-        # Left column: input controls
+        # Header status pill
+        self.status_pill = QLabel("Checking printer…")
+        self.status_pill.setStyleSheet(self._pill_style("neutral"))
+        self.status_pill.setMaximumHeight(28)
+        root.addWidget(self.status_pill)
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        root.addLayout(body, 1)
+
+        # Left column
         left = QVBoxLayout()
-        root.addLayout(left, 0)
+        left.setSpacing(8)
+        left_wrap = QWidget()
+        left_wrap.setLayout(left)
+        left_wrap.setMinimumWidth(320)
+        left_wrap.setMaximumWidth(380)
+        body.addWidget(left_wrap, 0)
 
+        # Text
         text_box = QGroupBox("Text (up to 4 lines)")
         text_layout = QVBoxLayout(text_box)
+        text_layout.setContentsMargins(8, 8, 8, 8)
         self.text_edit = QPlainTextEdit()
         self.text_edit.setPlaceholderText("Line 1\nLine 2\n…")
-        self.text_edit.setFixedHeight(110)
+        self.text_edit.setFixedHeight(96)
         text_layout.addWidget(self.text_edit)
         left.addWidget(text_box)
 
-        # Format
-        fmt_box = QGroupBox("Format")
-        fmt_layout = QFormLayout(fmt_box)
-        font_row = QHBoxLayout()
+        # Format + Print options (combined)
+        opts_box = QGroupBox("Format & print options")
+        form = QFormLayout(opts_box)
+        form.setContentsMargins(8, 8, 8, 8)
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(6)
+
         self.font_combo = QComboBox()
         self._populate_font_combo()
-        self.manage_fonts_btn = QPushButton("Manage…")
-        self.manage_fonts_btn.setToolTip("Open the Fonts tab to install / update.")
-        font_row.addWidget(self.font_combo, 1)
-        font_row.addWidget(self.manage_fonts_btn)
-        font_row_wrap = QWidget()
-        font_row_wrap.setLayout(font_row)
-        font_row.setContentsMargins(0, 0, 0, 0)
+        form.addRow("Font:", self.font_combo)
+
+        size_align = QHBoxLayout()
         self.font_size = QSpinBox()
         self.font_size.setRange(0, 200)
         self.font_size.setValue(0)
@@ -123,20 +163,31 @@ class LabelGUI(QMainWindow):
         self.align_combo = QComboBox()
         self.align_combo.addItems(["left", "center", "right"])
         self.align_combo.setCurrentIndex(1)
-        fmt_layout.addRow("Font:", font_row_wrap)
-        fmt_layout.addRow("Font size (px):", self.font_size)
-        fmt_layout.addRow("Align:", self.align_combo)
-        left.addWidget(fmt_box)
+        size_align.addWidget(QLabel("Size:"))
+        size_align.addWidget(self.font_size, 1)
+        size_align.addWidget(QLabel("Align:"))
+        size_align.addWidget(self.align_combo, 1)
+        sa_wrap = QWidget()
+        sa_wrap.setLayout(size_align)
+        size_align.setContentsMargins(0, 0, 0, 0)
+        form.addRow(sa_wrap)
 
-        # Print options
-        opts_box = QGroupBox("Print options")
-        opts_layout = QFormLayout(opts_box)
+        copies_pad = QHBoxLayout()
         self.copies = QSpinBox()
         self.copies.setRange(1, 99)
         self.copies.setValue(1)
         self.pad = QSpinBox()
         self.pad.setRange(0, 500)
         self.pad.setValue(0)
+        copies_pad.addWidget(QLabel("Copies:"))
+        copies_pad.addWidget(self.copies, 1)
+        copies_pad.addWidget(QLabel("Pad (px):"))
+        copies_pad.addWidget(self.pad, 1)
+        cp_wrap = QWidget()
+        cp_wrap.setLayout(copies_pad)
+        copies_pad.setContentsMargins(0, 0, 0, 0)
+        form.addRow(cp_wrap)
+
         self.auto_cut = QCheckBox("Auto-cut after print")
         self.auto_cut.setChecked(True)
         self.auto_cut.setToolTip(
@@ -144,16 +195,15 @@ class LabelGUI(QMainWindow):
         )
         self.precut = QCheckBox("Pre-cut (chain mode only)")
         self.cutmark = QCheckBox("Print cut-mark")
-        opts_layout.addRow("Copies:", self.copies)
-        opts_layout.addRow("Padding (px):", self.pad)
-        opts_layout.addRow(self.auto_cut)
-        opts_layout.addRow(self.precut)
-        opts_layout.addRow(self.cutmark)
+        form.addRow(self.auto_cut)
+        form.addRow(self.precut)
+        form.addRow(self.cutmark)
         left.addWidget(opts_box)
 
         # Image
-        img_box = QGroupBox("Image (optional, monochrome PNG)")
+        img_box = QGroupBox("Image (optional)")
         img_layout = QHBoxLayout(img_box)
+        img_layout.setContentsMargins(8, 8, 8, 8)
         self.image_path = QLineEdit()
         self.image_path.setPlaceholderText("(none)")
         self.image_browse = QPushButton("Browse…")
@@ -165,9 +215,17 @@ class LabelGUI(QMainWindow):
 
         # Actions
         action_row = QHBoxLayout()
-        self.show_cmd_btn = QPushButton("Show command")
+        self.show_cmd_btn = QToolButton()
+        self.show_cmd_btn.setText("Show command")
+        self.show_cmd_btn.setAutoRaise(True)
         self.print_btn = QPushButton("Print")
-        self.print_btn.setStyleSheet("font-weight: bold; padding: 6px 18px;")
+        self.print_btn.setDefault(True)
+        self.print_btn.setStyleSheet(
+            "QPushButton { font-weight: bold; padding: 8px 24px; "
+            "background: #2a7ae0; color: white; border-radius: 4px; border: none; }"
+            "QPushButton:hover { background: #1c5fc0; }"
+            "QPushButton:disabled { background: #888; }"
+        )
         action_row.addWidget(self.show_cmd_btn)
         action_row.addStretch(1)
         action_row.addWidget(self.print_btn)
@@ -176,35 +234,72 @@ class LabelGUI(QMainWindow):
 
         # Right column: preview
         right = QVBoxLayout()
-        root.addLayout(right, 1)
-        right.addWidget(QLabel("Preview (actual tape height, scaled to width):"))
+        right.setSpacing(6)
+        body.addLayout(right, 1)
+
+        # Preview header row: title + meta + zoom + mode toggle
+        head = QHBoxLayout()
+        head.addWidget(QLabel("<b>Preview</b>"))
+        self.preview_meta = QLabel("—")
+        self.preview_meta.setStyleSheet("color: #666;")
+        head.addWidget(self.preview_meta)
+        head.addStretch(1)
+        head.addWidget(QLabel("Zoom:"))
+        self.zoom_combo = QComboBox()
+        for z in (100, 200, 300, 400, 600, 800):
+            self.zoom_combo.addItem(f"{z}%", z)
+        self.zoom_combo.setCurrentIndex(2)  # 300%
+        head.addWidget(self.zoom_combo)
+        self.exact_chk = QCheckBox("Exact (pixel-accurate)")
+        self.exact_chk.setToolTip(
+            "Off: smooth Qt preview (approximate). "
+            "On: use ptouch-print --writepng for an exact rendering of what will print."
+        )
+        head.addWidget(self.exact_chk)
+        right.addLayout(head)
+
+        # Preview canvas
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumHeight(120)
+        self.preview_label.setMinimumHeight(140)
         self.preview_label.setStyleSheet(
-            "background: #222; color: #888; border: 1px solid #444;"
+            "background: #fafafa; color: #888; "
+            "border: 1px solid #cfcfcf; border-radius: 4px; padding: 8px;"
         )
         self.preview_label.setText("(no preview yet)")
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.preview_label)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         right.addWidget(scroll, 1)
+
+        # Collapsible log toggle
+        log_head = QHBoxLayout()
+        self.log_toggle = QToolButton()
+        self.log_toggle.setText("▸ ptouch-print output")
+        self.log_toggle.setAutoRaise(True)
+        self.log_toggle.setCheckable(True)
+        log_head.addWidget(self.log_toggle)
+        log_head.addStretch(1)
+        right.addLayout(log_head)
 
         self.preview_log = QPlainTextEdit()
         self.preview_log.setReadOnly(True)
-        self.preview_log.setMaximumHeight(120)
+        self.preview_log.setMaximumHeight(110)
         self.preview_log.setPlaceholderText("ptouch-print output appears here")
+        self.preview_log.setVisible(False)
+        self.preview_log.setStyleSheet("font-family: monospace; font-size: 11px;")
         right.addWidget(self.preview_log)
 
         return w
 
-    # ----- Printer tab -----
+    # ----- Device tab (merged printer + tape) -----
 
-    def _build_printer_tab(self) -> QWidget:
+    def _build_device_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
 
-        box = QGroupBox("Printer connection")
+        box = QGroupBox("Printer")
         form = QFormLayout(box)
         self.p_status = QLabel("—")
         self.p_dpi = QLabel("—")
@@ -214,57 +309,41 @@ class LabelGUI(QMainWindow):
         form.addRow("Max print width:", self.p_max_px)
         layout.addWidget(box)
 
-        info_box = QGroupBox("Raw ptouch-print --info output")
-        info_layout = QVBoxLayout(info_box)
-        self.p_raw = QPlainTextEdit()
-        self.p_raw.setReadOnly(True)
-        self.p_raw.setMaximumHeight(220)
-        self.p_raw.setStyleSheet("font-family: monospace;")
-        info_layout.addWidget(self.p_raw)
-        layout.addWidget(info_box)
-
-        self.p_refresh_btn = QPushButton("Refresh printer info")
-        layout.addWidget(self.p_refresh_btn)
-        layout.addStretch(1)
-
-        notes = QLabel(
-            "<i>Printer is queried via <code>ptouch-print --info</code> over USB. "
-            "If the printer is offline, the Label preview falls back to the last "
-            "known tape width.</i>"
-        )
-        notes.setWordWrap(True)
-        layout.addWidget(notes)
-        return w
-
-    # ----- Tape tab -----
-
-    def _build_tape_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
-        box = QGroupBox("Detected tape")
-        form = QFormLayout(box)
+        tbox = QGroupBox("Tape")
+        tform = QFormLayout(tbox)
         self.t_width = QLabel("—")
         self.t_usable = QLabel("—")
         self.t_media = QLabel("—")
         self.t_tape_color = QLabel("—")
         self.t_text_color = QLabel("—")
         self.t_error = QLabel("—")
-        form.addRow("Cassette width:", self.t_width)
-        form.addRow("Usable print height:", self.t_usable)
-        form.addRow("Media type:", self.t_media)
-        form.addRow("Tape colour:", self.t_tape_color)
-        form.addRow("Text colour:", self.t_text_color)
-        form.addRow("Error byte:", self.t_error)
-        layout.addWidget(box)
+        tform.addRow("Cassette width:", self.t_width)
+        tform.addRow("Usable print height:", self.t_usable)
+        tform.addRow("Media type:", self.t_media)
+        tform.addRow("Tape colour:", self.t_tape_color)
+        tform.addRow("Text colour:", self.t_text_color)
+        tform.addRow("Error byte:", self.t_error)
+        layout.addWidget(tbox)
 
-        self.t_refresh_btn = QPushButton("Refresh tape info")
-        layout.addWidget(self.t_refresh_btn)
+        info_box = QGroupBox("Raw ptouch-print --info output")
+        info_layout = QVBoxLayout(info_box)
+        self.p_raw = QPlainTextEdit()
+        self.p_raw.setReadOnly(True)
+        self.p_raw.setMaximumHeight(180)
+        self.p_raw.setStyleSheet("font-family: monospace;")
+        info_layout.addWidget(self.p_raw)
+        layout.addWidget(info_box)
 
-        layout.addWidget(QLabel(
-            "<i>0x0000 = ready. 0x0100 typically indicates a cover/tape issue. "
-            "After interruptions a power-cycle may be needed to clear errors.</i>"
-        ))
+        self.p_refresh_btn = QPushButton("Refresh device info")
+        layout.addWidget(self.p_refresh_btn)
+
+        notes = QLabel(
+            "<i>Queried via <code>ptouch-print --info</code> over USB. "
+            "0x0000 = ready. 0x0100 typically indicates cover/tape issue. "
+            "After interruptions a power-cycle may be needed.</i>"
+        )
+        notes.setWordWrap(True)
+        layout.addWidget(notes)
         layout.addStretch(1)
         return w
 
@@ -272,13 +351,11 @@ class LabelGUI(QMainWindow):
 
     def _wire_signals(self) -> None:
         self.p_refresh_btn.clicked.connect(self.refresh_info)
-        self.t_refresh_btn.clicked.connect(self.refresh_info)
-        self.manage_fonts_btn.clicked.connect(
-            lambda: self.tabs.setCurrentWidget(self.fonts_tab)
-        )
 
         self.text_edit.textChanged.connect(self._schedule_preview)
+        self.text_edit.textChanged.connect(self._update_text_direction)
         self.font_combo.currentIndexChanged.connect(self._schedule_preview)
+        self.font_combo.currentIndexChanged.connect(self._update_text_direction)
         self.font_size.valueChanged.connect(self._schedule_preview)
         self.align_combo.currentIndexChanged.connect(self._schedule_preview)
         self.pad.valueChanged.connect(self._schedule_preview)
@@ -286,10 +363,51 @@ class LabelGUI(QMainWindow):
         self.auto_cut.toggled.connect(self._schedule_preview)
         self.image_path.textChanged.connect(self._schedule_preview)
 
+        self.zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
+        self.exact_chk.toggled.connect(self._on_exact_toggled)
+
         self.image_browse.clicked.connect(self._on_browse_image)
         self.image_clear.clicked.connect(lambda: self.image_path.setText(""))
         self.show_cmd_btn.clicked.connect(self._on_show_cmd)
         self.print_btn.clicked.connect(self._on_print)
+
+        self.log_toggle.toggled.connect(self._on_log_toggled)
+
+    def _is_rtl(self) -> bool:
+        """RTL if a Hebrew-category font is chosen OR text contains Hebrew chars."""
+        family = self.font_combo.currentData() or ""
+        if is_hebrew_family(family):
+            return True
+        return contains_hebrew(self.text_edit.toPlainText())
+
+    def _update_text_direction(self) -> None:
+        rtl = self._is_rtl()
+        opt = self.text_edit.document().defaultTextOption()
+        from PyQt6.QtGui import QTextOption
+        opt.setTextDirection(
+            Qt.LayoutDirection.RightToLeft if rtl else Qt.LayoutDirection.LeftToRight
+        )
+        # default alignment for RTL is right
+        if rtl:
+            opt.setAlignment(Qt.AlignmentFlag.AlignRight)
+        else:
+            opt.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.text_edit.document().setDefaultTextOption(opt)
+        self.text_edit.setLayoutDirection(
+            Qt.LayoutDirection.RightToLeft if rtl else Qt.LayoutDirection.LeftToRight
+        )
+
+    def _on_log_toggled(self, on: bool) -> None:
+        self.preview_log.setVisible(on)
+        self.log_toggle.setText(("▾ " if on else "▸ ") + "ptouch-print output")
+
+    def _on_zoom_changed(self) -> None:
+        self._zoom = self.zoom_combo.currentData()
+        self._schedule_preview()
+
+    def _on_exact_toggled(self, on: bool) -> None:
+        self._exact_mode = on
+        self._schedule_preview()
 
     # ---------- Font dropdown ----------
 
@@ -315,11 +433,15 @@ class LabelGUI(QMainWindow):
             self.font_combo.setCurrentIndex(idx)
         self._schedule_preview()
 
-    # ---------- Job + preview ----------
+    # ---------- Job ----------
 
-    def _current_job(self, *, for_preview: bool) -> PrintJob:
-        text = self.text_edit.toPlainText()
-        lines = [ln for ln in text.splitlines() if ln.strip() != ""][:4]
+    def _current_job(self, *, for_preview: bool, lines_override: list[str] | None = None,
+                     copies_override: int | None = None) -> PrintJob:
+        if lines_override is None:
+            text = self.text_edit.toPlainText()
+            lines = [ln for ln in text.splitlines() if ln.strip() != ""][:4]
+        else:
+            lines = lines_override[:4]
         align = {"left": "l", "center": "c", "right": "r"}[self.align_combo.currentText()]
         font_name = self.font_combo.currentData() or DEFAULT_FAMILY
         font_size = self.font_size.value() or None
@@ -329,7 +451,7 @@ class LabelGUI(QMainWindow):
             font=font_name,
             font_size=font_size,
             align=align,
-            copies=self.copies.value(),
+            copies=copies_override if copies_override is not None else self.copies.value(),
             pad=self.pad.value() or None,
             chain=not self.auto_cut.isChecked(),
             precut=self.precut.isChecked(),
@@ -340,8 +462,31 @@ class LabelGUI(QMainWindow):
             ),
         )
 
+    def _batch_job_factory(self, row: BatchRow) -> PrintJob:
+        # split on \n so batch rows can have multi-line text too
+        lines = [ln for ln in row.text.splitlines() if ln.strip()][:4] or [row.text]
+        return self._current_job(
+            for_preview=False, lines_override=lines, copies_override=row.copies
+        )
+
     def _schedule_preview(self) -> None:
         self._debounce.start()
+
+    # ---------- Status pill ----------
+
+    @staticmethod
+    def _pill_style(kind: str) -> str:
+        palettes = {
+            "ok":      ("#e6f5ec", "#1e7f3a"),
+            "warn":    ("#fff4d6", "#8a6500"),
+            "err":     ("#fbe6e6", "#a01b1b"),
+            "neutral": ("#eee", "#444"),
+        }
+        bg, fg = palettes.get(kind, palettes["neutral"])
+        return (
+            f"background: {bg}; color: {fg}; "
+            "padding: 4px 10px; border-radius: 12px; font-weight: 600;"
+        )
 
     # ---------- Slots ----------
 
@@ -351,6 +496,7 @@ class LabelGUI(QMainWindow):
         except PtouchError as exc:
             self._printer_online = False
             self._update_printer_view(found=False, err=str(exc), info=None)
+            self._set_pill("err", f"⚠ {exc}")
             self.statusBar().showMessage(str(exc), 8000)
             return
         self._last_info_raw = info.raw
@@ -358,13 +504,28 @@ class LabelGUI(QMainWindow):
             self._printer_online = True
             if info.tape_width_px:
                 self._last_tape_px = info.tape_width_px
+            if info.media_width_mm:
+                self._last_tape_mm = info.media_width_mm
         else:
             self._printer_online = False
         self._update_printer_view(found=info.found, err=None, info=info)
+
+        if info.found and info.ready:
+            self._set_pill(
+                "ok",
+                f"● Printer connected · {info.media_width_mm or '?'} mm tape · ready",
+            )
+        elif info.found:
+            self._set_pill("warn", f"● Connected · error byte {info.error_code}")
+        else:
+            self._set_pill("err", "● Printer not detected")
         self._schedule_preview()
 
+    def _set_pill(self, kind: str, text: str) -> None:
+        self.status_pill.setText(text)
+        self.status_pill.setStyleSheet(self._pill_style(kind))
+
     def _update_printer_view(self, *, found: bool, err: str | None, info) -> None:
-        # Printer tab
         if err:
             self.p_status.setText(f"<b style='color:#c33'>{err}</b>")
         elif found:
@@ -380,7 +541,6 @@ class LabelGUI(QMainWindow):
             self.p_max_px.setText("—")
             self.p_raw.setPlainText("")
 
-        # Tape tab
         if info and info.found:
             self.t_width.setText(f"{info.media_width_mm or '?'} mm")
             self.t_usable.setText(f"{info.tape_width_px or '?'} px")
@@ -398,7 +558,15 @@ class LabelGUI(QMainWindow):
                       self.t_text_color, self.t_error):
                 w.setText("—")
 
+    # ---------- Preview ----------
+
     def _do_preview(self) -> None:
+        if self._exact_mode:
+            self._do_exact_preview()
+        else:
+            self._do_soft_preview()
+
+    def _do_exact_preview(self) -> None:
         job = self._current_job(for_preview=True)
         try:
             rc, out = render_preview(job, self._preview_path)
@@ -409,14 +577,95 @@ class LabelGUI(QMainWindow):
         if rc == 0 and self._preview_path.exists():
             pix = QPixmap(str(self._preview_path))
             if not pix.isNull():
-                target_w = max(400, self.preview_label.width() - 16)
-                scaled = pix.scaledToWidth(
-                    target_w, Qt.TransformationMode.SmoothTransformation
-                )
-                self.preview_label.setPixmap(scaled)
-                self.preview_label.setText("")
+                self._apply_preview_pixmap(pix, source_px=(pix.width(), pix.height()))
                 return
         self.preview_label.setText("(preview failed — see log)")
+
+    def _do_soft_preview(self) -> None:
+        """Render preview with QPainter at high res (anti-aliased)."""
+        text = self.text_edit.toPlainText()
+        lines = [ln for ln in text.splitlines() if ln.strip() != ""][:4] or [""]
+        tape_px = self._last_tape_px
+        # Pick font size: user-specified, or auto = tape_px / lines * 0.9
+        if self.font_size.value() > 0:
+            target_px = self.font_size.value()
+        else:
+            target_px = int(tape_px / max(1, len(lines)) * 0.9)
+
+        font_family = self.font_combo.currentData() or DEFAULT_FAMILY
+        font = QFont(font_family)
+        font.setPixelSize(max(6, target_px))
+
+        # Measure to size canvas
+        fm = QFontMetricsF(font)
+        line_h = fm.height()
+        widths = [fm.horizontalAdvance(ln) for ln in lines]
+        text_w = max(widths) if widths else 0
+        pad_px = self.pad.value()
+        # canvas: tape_px tall, width = max(text_w + margin, min)
+        margin_x = max(4, int(tape_px * 0.08))
+        canvas_w = int(text_w + 2 * margin_x + pad_px * 2)
+        canvas_w = max(canvas_w, tape_px)  # at least square
+        canvas_h = tape_px
+
+        img = QImage(canvas_w, canvas_h, QImage.Format.Format_RGB32)
+        img.fill(QColor("#ffffff"))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        p.setPen(QColor("#000000"))
+        p.setFont(font)
+
+        align_str = self.align_combo.currentText()
+        flag_h = {
+            "left":   Qt.AlignmentFlag.AlignLeft,
+            "center": Qt.AlignmentFlag.AlignHCenter,
+            "right":  Qt.AlignmentFlag.AlignRight,
+        }[align_str]
+
+        rtl = self._is_rtl()
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QTextOption
+        opt = QTextOption()
+        opt.setAlignment(flag_h | Qt.AlignmentFlag.AlignVCenter)
+        opt.setTextDirection(
+            Qt.LayoutDirection.RightToLeft if rtl else Qt.LayoutDirection.LeftToRight
+        )
+        opt.setWrapMode(QTextOption.WrapMode.NoWrap)
+
+        total_text_h = line_h * len(lines)
+        y0 = (canvas_h - total_text_h) / 2
+        for i, ln in enumerate(lines):
+            rect = QRectF(pad_px + margin_x, y0 + i * line_h,
+                          canvas_w - 2 * (pad_px + margin_x), line_h)
+            p.drawText(rect, ln, opt)
+        p.end()
+
+        pix = QPixmap.fromImage(img)
+        self._apply_preview_pixmap(pix, source_px=(canvas_w, canvas_h))
+        self.preview_log.setPlainText(
+            f"(soft preview — {canvas_w}×{canvas_h} px @ font {target_px}px)"
+        )
+
+    def _apply_preview_pixmap(self, pix: QPixmap, source_px: tuple[int, int]) -> None:
+        src_w, src_h = source_px
+        zoom = self._zoom / 100.0
+        target_h = max(1, int(src_h * zoom))
+        scaled = pix.scaledToHeight(
+            target_h, Qt.TransformationMode.SmoothTransformation
+        )
+        self.preview_label.setPixmap(scaled)
+        self.preview_label.setText("")
+        self.preview_label.setMinimumSize(scaled.size())
+
+        mm_length = src_w / PRINTER_DPI * 25.4
+        mm_width = src_h / PRINTER_DPI * 25.4
+        rtl_tag = " · RTL" if self._is_rtl() else ""
+        self.preview_meta.setText(
+            f"{src_w}×{src_h} px · {mm_length:.1f} × {mm_width:.1f} mm{rtl_tag}"
+        )
+
+    # ---------- Misc slots ----------
 
     def _on_browse_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -434,7 +683,7 @@ class LabelGUI(QMainWindow):
         if not self._printer_online:
             QMessageBox.warning(
                 self, "Printer offline",
-                "Printer not detected. Switch to the Printer tab and refresh."
+                "Printer not detected. Switch to the Device tab and refresh."
             )
             return
         job = self._current_job(for_preview=False)
