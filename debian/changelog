@@ -1,3 +1,16 @@
+pt-p710bt-label-gui (0.2.0-1) unstable; urgency=medium
+
+  * Release 0.2.0 — Label tab UX overhaul.
+    - Tabbed UI (Label / Batch / Device / Fonts).
+    - Soft Qt-rendered preview with "Exact (pixel-accurate)" toggle.
+    - Horizontal preview with dimension arrows showing tape height and
+      label length in mm.
+    - "Fill tape height" option; conservative auto-size by default.
+    - Hebrew fonts library, RTL handling, Google Fonts installer.
+    - Batch tab for multi-label runs.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:08:17 +0300
+
 pt-p710bt-label-gui (0.1.0-7) unstable; urgency=medium
 
   * Preview reworked: label is now drawn as a horizontal strip at the true

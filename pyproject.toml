@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pt-p710bt-label-gui"
-version = "0.1.0"
+version = "0.2.0"
 description = "Qt6 GUI wrapper around ptouch-print for the Brother PT-P710BT label printer (Linux/KDE)."
 readme = "README.md"
 requires-python = ">=3.11"
