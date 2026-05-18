@@ -40,7 +40,8 @@ class PrintJob:
     font_size: int | None = None
     align: str = "c"          # l|c|r
     copies: int = 1
-    pad: int | None = None
+    pad_left: int | None = None    # blank px before the text/image
+    pad_right: int | None = None   # blank px after the text/image
     chain: bool = False
     precut: bool = False
     cutmark: bool = False
@@ -65,8 +66,8 @@ class PrintJob:
             argv += ["--precut"]
         if self.cutmark:
             argv += ["--cutmark"]
-        if self.pad:
-            argv += [f"--pad={self.pad}"]
+        if self.pad_left:
+            argv += [f"--pad={self.pad_left}"]
         argv += [f"--align={self.align}"]
         if self.image:
             argv += [f"--image={self.image}"]
@@ -77,6 +78,8 @@ class PrintJob:
             argv += [f"--text={lines[0]}"]
             for ln in lines[1:]:
                 argv += [f"--newline={ln}"]
+        if self.pad_right:
+            argv += [f"--pad={self.pad_right}"]
         return argv
 
 

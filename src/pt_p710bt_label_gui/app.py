@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -178,7 +179,7 @@ class LabelGUI(QMainWindow):
         size_align.setContentsMargins(0, 0, 0, 0)
         form.addRow(sa_wrap)
 
-        copies_pad = QHBoxLayout()
+        copies_row = QHBoxLayout()
         self.copies = QSpinBox()
         self.copies.setRange(1, 99)
         self.copies.setValue(1)
@@ -190,17 +191,37 @@ class LabelGUI(QMainWindow):
             "With auto-cut OFF: all copies print as one continuous strip "
             "with no cuts between (you cut manually). No wasted tape."
         )
-        self.pad = QSpinBox()
-        self.pad.setRange(0, 500)
-        self.pad.setValue(0)
-        copies_pad.addWidget(QLabel("Copies:"))
-        copies_pad.addWidget(self.copies, 1)
-        copies_pad.addWidget(QLabel("Pad (px):"))
-        copies_pad.addWidget(self.pad, 1)
+        copies_row.addWidget(QLabel("Copies:"))
+        copies_row.addWidget(self.copies, 1)
+        copies_row.addStretch(1)
         cp_wrap = QWidget()
-        cp_wrap.setLayout(copies_pad)
-        copies_pad.setContentsMargins(0, 0, 0, 0)
+        cp_wrap.setLayout(copies_row)
+        copies_row.setContentsMargins(0, 0, 0, 0)
         form.addRow(cp_wrap)
+
+        margins_row = QHBoxLayout()
+        self.margin_l = QDoubleSpinBox()
+        self.margin_l.setRange(0.0, 50.0)
+        self.margin_l.setSingleStep(0.5)
+        self.margin_l.setSuffix(" mm")
+        self.margin_l.setValue(2.0)
+        self.margin_r = QDoubleSpinBox()
+        self.margin_r.setRange(0.0, 50.0)
+        self.margin_r.setSingleStep(0.5)
+        self.margin_r.setSuffix(" mm")
+        self.margin_r.setValue(2.0)
+        self.margin_link = QCheckBox("link")
+        self.margin_link.setChecked(True)
+        self.margin_link.setToolTip("When ticked, right margin mirrors left.")
+        margins_row.addWidget(QLabel("Margin L:"))
+        margins_row.addWidget(self.margin_l, 1)
+        margins_row.addWidget(QLabel("R:"))
+        margins_row.addWidget(self.margin_r, 1)
+        margins_row.addWidget(self.margin_link)
+        m_wrap = QWidget()
+        m_wrap.setLayout(margins_row)
+        margins_row.setContentsMargins(0, 0, 0, 0)
+        form.addRow(m_wrap)
 
         self.fill_height = QCheckBox("Fill tape height (auto-size to fit)")
         self.fill_height.setChecked(False)
@@ -380,7 +401,9 @@ class LabelGUI(QMainWindow):
         self.font_combo.currentIndexChanged.connect(self._sync_font_button)
         self.font_size.valueChanged.connect(self._schedule_preview)
         self.align_combo.currentIndexChanged.connect(self._schedule_preview)
-        self.pad.valueChanged.connect(self._schedule_preview)
+        self.margin_l.valueChanged.connect(self._on_margin_l_changed)
+        self.margin_r.valueChanged.connect(self._schedule_preview)
+        self.margin_link.toggled.connect(self._on_margin_link_toggled)
         self.cutmark.toggled.connect(self._schedule_preview)
         self.auto_cut.toggled.connect(self._schedule_preview)
         self.fill_height.toggled.connect(self._schedule_preview)
@@ -423,6 +446,24 @@ class LabelGUI(QMainWindow):
     def _on_log_toggled(self, on: bool) -> None:
         self.preview_log.setVisible(on)
         self.log_toggle.setText(("▾ " if on else "▸ ") + "ptouch-print output")
+
+    def _on_margin_l_changed(self, value: float) -> None:
+        if self.margin_link.isChecked():
+            self.margin_r.blockSignals(True)
+            self.margin_r.setValue(value)
+            self.margin_r.blockSignals(False)
+        self._schedule_preview()
+
+    def _on_margin_link_toggled(self, on: bool) -> None:
+        if on:
+            self.margin_r.blockSignals(True)
+            self.margin_r.setValue(self.margin_l.value())
+            self.margin_r.blockSignals(False)
+            self._schedule_preview()
+
+    @staticmethod
+    def _margin_px(mm: float) -> int:
+        return int(round(mm / 25.4 * PRINTER_DPI))
 
     def _on_open_font_picker(self) -> None:
         current = self.font_combo.currentData() or DEFAULT_FAMILY
@@ -492,7 +533,8 @@ class LabelGUI(QMainWindow):
             font_size=font_size,
             align=align,
             copies=copies_override if copies_override is not None else self.copies.value(),
-            pad=self.pad.value() or None,
+            pad_left=self._margin_px(self.margin_l.value()) or None,
+            pad_right=self._margin_px(self.margin_r.value()) or None,
             chain=not self.auto_cut.isChecked(),
             precut=self.precut.isChecked(),
             cutmark=self.cutmark.isChecked(),
@@ -645,10 +687,10 @@ class LabelGUI(QMainWindow):
         line_h = fm.height()
         widths = [fm.horizontalAdvance(ln) for ln in lines]
         text_w = max(widths) if widths else 0
-        pad_px = self.pad.value()
-        margin_x = max(4, int(tape_px * 0.08))
+        pad_l = self._margin_px(self.margin_l.value())
+        pad_r = self._margin_px(self.margin_r.value())
         # Minimum width keeps the preview reading horizontally even when empty.
-        canvas_w = max(int(text_w + 2 * margin_x + pad_px * 2), int(tape_px * 2.5))
+        canvas_w = max(int(text_w + pad_l + pad_r), int(tape_px * 2.5))
         canvas_h = tape_px
 
         img = QImage(canvas_w, canvas_h, QImage.Format.Format_RGB32)
@@ -692,8 +734,7 @@ class LabelGUI(QMainWindow):
         for i, ln in enumerate(lines):
             baseline = first_baseline + i * line_h
             rect_y = baseline - fm.ascent()
-            rect = QRectF(pad_px + margin_x, rect_y,
-                          canvas_w - 2 * (pad_px + margin_x), line_h)
+            rect = QRectF(pad_l, rect_y, canvas_w - pad_l - pad_r, line_h)
             p.drawText(rect, ln, opt)
         p.end()
 

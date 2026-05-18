@@ -1,3 +1,13 @@
+pt-p710bt-label-gui (0.2.0-6) unstable; urgency=medium
+
+  * Replace the "Pad (px)" field with separate Left/Right margin controls
+    in mm, with an optional "link" checkbox to mirror left → right.
+    Maps to two --pad invocations (before and after the text) in
+    ptouch-print so margins apply to both ends of the label.
+  * Default 2 mm on each side.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:33:23 +0300
+
 pt-p710bt-label-gui (0.2.0-5) unstable; urgency=medium
 
   * Revert v0.2.0-4's chain+precut handling — that produced one glued strip
