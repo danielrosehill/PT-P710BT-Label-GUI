@@ -26,9 +26,14 @@ USER_AGENT = "pt-p710bt-label-gui/0.1"
 
 
 def installed_families() -> set[str]:
+    """Return the lowercased set of fontconfig family names currently visible.
+
+    Uses `fc-list -f '%{family}\\n'` so each output line is exactly the family
+    field (possibly comma-separated aliases) — not the default formatted form
+    which prefixes the file path."""
     try:
         cp = subprocess.run(
-            ["fc-list", ":family"],
+            ["fc-list", "-f", "%{family}\n"],
             capture_output=True, text=True, timeout=5,
         )
     except Exception:

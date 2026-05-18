@@ -1,3 +1,15 @@
+pt-p710bt-label-gui (0.1.0-5) unstable; urgency=medium
+
+  * Fix: font-installed detection was always returning false, so every font
+    appeared "missing" in the Fonts tab even after a successful install.
+    Root cause: was calling `fc-list :family` which returns lines like
+    "/path/to/x.ttf: Lato:style=Regular" — the path prefix was being parsed
+    as part of the family name. Switched to
+    `fc-list -f '%{family}\n'` which emits one bare family per line.
+    The downloads were always working; only the UI status was wrong.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:50:00 +0300
+
 pt-p710bt-label-gui (0.1.0-4) unstable; urgency=medium
 
   * Fonts now install into ~/.local/share/fonts/google-fonts/ — the standard
