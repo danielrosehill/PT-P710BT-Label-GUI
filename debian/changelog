@@ -1,3 +1,16 @@
+pt-p710bt-label-gui (0.1.0-4) unstable; urgency=medium
+
+  * Fonts now install into ~/.local/share/fonts/google-fonts/ — the standard
+    XDG user font directory, visible to every desktop app for this user.
+    Previously installed into an app-private subfolder which behaved like a
+    private cache.
+  * Added one-shot migration on app startup: any TTFs left over in the old
+    ~/.local/share/fonts/pt-p710bt-label-gui/ are moved into the new
+    location and fontconfig is refreshed. Status-bar message confirms.
+  * Replaced "maintained" wording throughout (banned-word rule).
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:30:00 +0300
+
 pt-p710bt-label-gui (0.1.0-3) unstable; urgency=medium
 
   * Restructured the GUI into tabs (was: single overloaded window).
@@ -5,7 +18,7 @@ pt-p710bt-label-gui (0.1.0-3) unstable; urgency=medium
     - Printer tab: connection status, dpi, max width, raw --info dump.
     - Tape tab: width / usable px / media / colours / error byte, all on
       their own surface with explanatory note.
-    - Fonts tab: top-level — replaces the buried Tools menu. Curated font
+    - Fonts tab: top-level — replaces the buried Tools menu. Maintained font
       table with installed/missing badges, "Install missing" /
       "Reinstall all" buttons, threaded progress + log.
   * Label tab font row now has a "Manage…" button that jumps to the
@@ -17,12 +30,12 @@ pt-p710bt-label-gui (0.1.0-3) unstable; urgency=medium
 
 pt-p710bt-label-gui (0.1.0-2) unstable; urgency=medium
 
-  * Curated Google Fonts library (30 fonts incl. Heebo for Hebrew).
+  * Maintained Google Fonts library (30 fonts incl. Heebo for Hebrew).
     - Font picker is now a category-grouped dropdown sourced from
       pt_p710bt_label_gui.fonts; default is IBM Plex Sans.
     - Each entry tagged "(not installed)" when fontconfig doesn't see it.
   * New Tools menu → "Install Google Fonts…" dialog.
-    - Lists every curated font with installed/missing status.
+    - Lists every maintained font with installed/missing status.
     - "Install missing" and "Reinstall all" buttons; threaded download +
       progress log; runs fc-cache when done.
     - Downloads directly from github.com/google/fonts (canonical source) —

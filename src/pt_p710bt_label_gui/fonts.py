@@ -1,4 +1,4 @@
-"""Curated Google Fonts library shipped with the GUI."""
+"""Google Fonts library shipped with the GUI."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,7 +12,7 @@ class FontEntry:
     category: str  # sans | serif | mono | display | handwriting | hebrew
 
 
-# Curated list per Daniel's request. Ordering preserved.
+# Maintained list per Daniel's request. Ordering preserved.
 FONTS: list[FontEntry] = [
     FontEntry("Lato",                 "Lato",                 "lato",                 "sans"),
     FontEntry("Akatab",               "Akatab",               "akatab",               "sans"),         # interpreted "Akt"
@@ -66,7 +66,7 @@ def by_family(family: str) -> FontEntry | None:
 
 
 def grouped() -> list[tuple[str, list[FontEntry]]]:
-    """Return [(category_label, [entries…]), …] preserving curated order within."""
+    """Return [(category_label, [entries…]), …] preserving list order within."""
     order = ["sans", "serif", "mono", "display", "handwriting", "hebrew"]
     seen_by_family: set[str] = set()
     buckets: dict[str, list[FontEntry]] = {k: [] for k in order}

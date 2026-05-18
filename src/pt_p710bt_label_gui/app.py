@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .font_installer import is_installed
+from .font_installer import is_installed, migrate_legacy_dir, refresh_cache
 from .fonts import DEFAULT_FAMILY, FONTS, grouped
 from .fonts_tab import FontsTab
 from .ptouch import PrintJob, PtouchError, print_job, query_info, render_preview
@@ -56,8 +56,17 @@ class LabelGUI(QMainWindow):
         self._debounce.setInterval(PREVIEW_DEBOUNCE_MS)
         self._debounce.timeout.connect(self._do_preview)
 
+        moved = migrate_legacy_dir()
+        if moved:
+            refresh_cache()
+
         self._build_tabs()
         self._wire_signals()
+        if moved:
+            self.statusBar().showMessage(
+                f"Migrated {moved} font file(s) to ~/.local/share/fonts/google-fonts/",
+                6000,
+            )
         self.refresh_info()
         self._schedule_preview()
 

@@ -1,4 +1,4 @@
-"""'Fonts' tab — curated Google Fonts list with install controls."""
+"""'Fonts' tab — Google Fonts list with install controls."""
 from __future__ import annotations
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -51,10 +51,11 @@ class FontsTab(QWidget):
         layout = QVBoxLayout(self)
 
         layout.addWidget(QLabel(
-            "<b>Curated Google Fonts library.</b><br>"
+            "<b>Google Fonts library.</b><br>"
             "Missing fonts download from <code>github.com/google/fonts</code> into "
-            "<code>~/.local/share/fonts/pt-p710bt-label-gui/</code> and refresh the "
-            "system font cache."
+            "<code>~/.local/share/fonts/google-fonts/</code> — the standard user "
+            "font directory, visible to every desktop app for this user. "
+            "Fontconfig is refreshed after each batch."
         ))
 
         # Counts header

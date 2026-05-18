@@ -18,7 +18,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-INSTALL_DIR = Path.home() / ".local" / "share" / "fonts" / "pt-p710bt-label-gui"
+INSTALL_DIR = Path.home() / ".local" / "share" / "fonts" / "google-fonts"
+LEGACY_DIR  = Path.home() / ".local" / "share" / "fonts" / "pt-p710bt-label-gui"
 LICENSE_DIRS = ("ofl", "apache", "ufl")  # try in order
 API_BASE = "https://api.github.com/repos/google/fonts/contents/{path}"
 USER_AGENT = "pt-p710bt-label-gui/0.1"
@@ -109,6 +110,27 @@ def install_font(slug: str, *, timeout: float = 30.0) -> tuple[bool, str]:
         (INSTALL_DIR / e["name"]).write_bytes(data)
         count += 1
     return True, f"{count} file(s)"
+
+
+def migrate_legacy_dir() -> int:
+    """Move any TTFs from the old app-private dir into the shared user font dir.
+    Returns the number of files moved (0 if nothing to do)."""
+    if not LEGACY_DIR.is_dir():
+        return 0
+    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for f in LEGACY_DIR.glob("*.ttf"):
+        target = INSTALL_DIR / f.name
+        if target.exists():
+            f.unlink()
+        else:
+            f.rename(target)
+        moved += 1
+    try:
+        LEGACY_DIR.rmdir()
+    except OSError:
+        pass  # still has non-ttf contents; leave it
+    return moved
 
 
 def refresh_cache() -> None:
