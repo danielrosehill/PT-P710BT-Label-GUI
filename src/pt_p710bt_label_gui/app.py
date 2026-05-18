@@ -622,7 +622,7 @@ class LabelGUI(QMainWindow):
         # Fill mode: 90% of available per-line height.
         # Conservative (default): 60% of available per-line height.
         fill = self.fill_height.isChecked()
-        scale = 0.9 if fill else 0.6
+        scale = 0.85 if fill else 0.55
         if self.font_size.value() > 0:
             target_px = self.font_size.value()
         else:
@@ -662,16 +662,29 @@ class LabelGUI(QMainWindow):
         from PyQt6.QtCore import QRectF
         from PyQt6.QtGui import QTextOption
         opt = QTextOption()
-        opt.setAlignment(flag_h | Qt.AlignmentFlag.AlignVCenter)
+        opt.setAlignment(flag_h | Qt.AlignmentFlag.AlignTop)
         opt.setTextDirection(
             Qt.LayoutDirection.RightToLeft if rtl else Qt.LayoutDirection.LeftToRight
         )
         opt.setWrapMode(QTextOption.WrapMode.NoWrap)
 
-        total_text_h = line_h * len(lines)
-        y0 = (canvas_h - total_text_h) / 2
+        # Vertically centre on the *visible ink* (tightBoundingRect), not on
+        # font ascent/descent — otherwise digits/caps drift toward the bottom
+        # of the printable area because Qt reserves descender space.
+        sample = next((ln for ln in lines if ln.strip()), "Mg")
+        ink = fm.tightBoundingRect(sample)
+        if ink.height() <= 0:
+            ink = fm.tightBoundingRect("Mg")
+
+        n = len(lines)
+        block_h = (n - 1) * line_h + ink.height()
+        block_top = (canvas_h - block_h) / 2
+        first_baseline = block_top - ink.y()  # ink.y() is negative for ascenders
+
         for i, ln in enumerate(lines):
-            rect = QRectF(pad_px + margin_x, y0 + i * line_h,
+            baseline = first_baseline + i * line_h
+            rect_y = baseline - fm.ascent()
+            rect = QRectF(pad_px + margin_x, rect_y,
                           canvas_w - 2 * (pad_px + margin_x), line_h)
             p.drawText(rect, ln, opt)
         p.end()

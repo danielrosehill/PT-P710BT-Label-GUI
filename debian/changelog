@@ -1,3 +1,14 @@
+pt-p710bt-label-gui (0.2.0-3) unstable; urgency=medium
+
+  * Fix soft preview vertical centering: text was drifting toward the bottom
+    of the printable area for digit-only / all-caps labels because Qt
+    centred on font ascent/descent (which reserves descender space) rather
+    than on visible ink. Now centred on tightBoundingRect.
+  * Slightly more conservative default auto-size (0.55 of tape height,
+    was 0.60) for a bit more visual margin.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:19:13 +0300
+
 pt-p710bt-label-gui (0.2.0-2) unstable; urgency=medium
 
   * Preview height dimension now shows the physical tape width (e.g. 12 mm)
