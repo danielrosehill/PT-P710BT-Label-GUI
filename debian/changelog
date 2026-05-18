@@ -1,3 +1,16 @@
+pt-p710bt-label-gui (0.2.0-5) unstable; urgency=medium
+
+  * Revert v0.2.0-4's chain+precut handling — that produced one glued strip
+    (precut once, then all copies back-to-back with no cut between),
+    appearing as a single label.
+  * Multi-copy with auto-cut now runs N separate ptouch-print invocations
+    again (clean cut per copy; the ~24 mm leading bleed per copy is
+    physical and unavoidable).
+  * Updated Copies tooltip: with auto-cut OFF (chain mode) all copies print
+    as one continuous strip with no wasted tape — user cuts manually.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Mon, 18 May 2026 23:29:22 +0300
+
 pt-p710bt-label-gui (0.2.0-4) unstable; urgency=medium
 
   * Multi-copy print now uses chain + precut + --copies=N in a single

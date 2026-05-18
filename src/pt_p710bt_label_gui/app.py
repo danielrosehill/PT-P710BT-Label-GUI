@@ -183,9 +183,12 @@ class LabelGUI(QMainWindow):
         self.copies.setRange(1, 99)
         self.copies.setValue(1)
         self.copies.setToolTip(
-            "Multiple copies with auto-cut on are printed in chain+precut mode: "
-            "one ~24 mm leading bleed at the start, then a cut between each "
-            "label. No final cut — pull/cut the last label manually."
+            "With auto-cut ON: each copy is printed and cut separately. "
+            "The ~24 mm head-to-cutter mechanical gap means each cut leaves "
+            "a leading bleed on the next copy — this is physical and "
+            "unavoidable.\n\n"
+            "With auto-cut OFF: all copies print as one continuous strip "
+            "with no cuts between (you cut manually). No wasted tape."
         )
         self.pad = QSpinBox()
         self.pad.setRange(0, 500)
@@ -832,29 +835,37 @@ class LabelGUI(QMainWindow):
             QMessageBox.warning(self, "Nothing to print",
                                 "Enter text or pick an image first.")
             return
-        # Multi-copy with cut-between: use one ptouch-print invocation with
-        # --chain + --precut + --copies=N. The printer's ~24 mm leading-edge
-        # bleed happens once for the whole batch (a single precut clears it),
-        # then each label is cut from the next. Running N separate jobs would
-        # replicate the bleed on every copy.
+        # Cuts between copies require the printer's ~24 mm head-to-cutter
+        # gap to be fed forward for each cut — that bleed margin is physical
+        # and unavoidable. So with auto-cut ON we run N separate ptouch-print
+        # invocations (clean cuts, ~24 mm leader on each). With auto-cut OFF,
+        # one invocation with --copies=N --chain produces a continuous strip
+        # with no cuts between (user cuts manually).
+        copies = job.copies
         auto_cut = self.auto_cut.isChecked()
-        if auto_cut and job.copies > 1:
-            job.chain = True
-            job.precut = True
-        try:
-            rc, out = print_job(job)
-        except PtouchError as exc:
-            QMessageBox.critical(self, "Print error", str(exc))
-            return
-        self.preview_log.setPlainText(out.strip() or f"(exit {rc})")
-        if rc != 0:
-            QMessageBox.critical(
-                self, "Print failed",
-                f"ptouch-print exited {rc}\n\n{out.strip()}"
-            )
-            return
+        if auto_cut and copies > 1:
+            job.copies = 1
+            runs = copies
+        else:
+            runs = 1
+        outs: list[str] = []
+        for i in range(runs):
+            try:
+                rc, out = print_job(job)
+            except PtouchError as exc:
+                QMessageBox.critical(self, "Print error", str(exc))
+                return
+            outs.append(f"# copy {i + 1}/{runs} (exit {rc})\n{out.strip()}")
+            if rc != 0:
+                self.preview_log.setPlainText("\n".join(outs))
+                QMessageBox.critical(
+                    self, "Print failed",
+                    f"ptouch-print exited {rc} on copy {i + 1}/{runs}\n\n{out.strip()}"
+                )
+                return
+        self.preview_log.setPlainText("\n".join(outs))
         self.statusBar().showMessage(
-            f"Printed {job.copies} {'copy' if job.copies == 1 else 'copies'}.", 4000
+            f"Printed {copies} {'copy' if copies == 1 else 'copies'}.", 4000
         )
 
 
