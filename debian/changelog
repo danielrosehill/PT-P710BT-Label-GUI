@@ -1,3 +1,16 @@
+pt-p710bt-label-gui (0.2.0-9) unstable; urgency=medium
+
+  * Remove CUPS backend (the page-size handling kept fighting us).
+  * Switch the print path to nbuchwitz/ptouch via the patched fork that
+    adds PT-P710BT support. `print_multi` sends one job with N pages
+    and a single leader, full-cut between each label — what ptouch-print
+    physically can't do.
+  * Interpreter discovery: env override $PT_P710BT_LABEL_GUI_NB_PYTHON,
+    then the known venv at ~/repos/github/nbuchwitz-ptouch/.venv, then
+    system python3.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 00:12:03 +0300
+
 pt-p710bt-label-gui (0.2.0-8) unstable; urgency=medium
 
   * Drop the backend selector — CUPS is now the only print path. The
