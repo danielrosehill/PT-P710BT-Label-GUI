@@ -348,16 +348,23 @@ class ConnectionUSB(Connection):
         """
         import time
 
+        # USB bulk endpoints commonly return short writes when the device
+        # is slow to drain. Loop over the remaining bytes instead of bailing
+        # on the first short write.
         last_error = None
         for attempt in range(retries):
             try:
-                written = self._ep_out.write(payload, timeout=5000)
-                if written != len(payload):
-                    raise PrinterWriteError(
-                        f"USB write incomplete: {written}/{len(payload)} bytes written. "
-                        "This may indicate a USB communication issue. "
-                        "Try reconnecting the printer or using a different USB port."
-                    )
+                remaining = memoryview(payload)
+                total = len(payload)
+                while remaining:
+                    written = self._ep_out.write(bytes(remaining), timeout=5000)
+                    if written <= 0:
+                        raise PrinterWriteError(
+                            f"USB write stalled: {total - len(remaining)}/{total} bytes "
+                            "written. Try reconnecting the printer or using a different "
+                            "USB port."
+                        )
+                    remaining = remaining[written:]
                 return  # Success
             except usb.core.USBError as e:
                 last_error = e

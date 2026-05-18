@@ -1,3 +1,13 @@
+pt-p710bt-label-gui (0.3.0-5) unstable; urgency=medium
+
+  * Fix "USB write incomplete: 384/4155 bytes written" errors on the
+    bulk OUT endpoint. PyUSB's bulk write returns the actual count
+    transferred — short writes are normal on a slow-draining endpoint
+    and don't indicate a comms failure. The vendored connection.py now
+    loops over the remaining bytes until the full payload is drained.
+
+ -- Daniel Rosehill <daniel@danielrosehill.co.il>  Tue, 19 May 2026 01:19:45 +0300
+
 pt-p710bt-label-gui (0.3.0-4) unstable; urgency=medium
 
   * Vendor the patched nbuchwitz/ptouch fork into the package tree
